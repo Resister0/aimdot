@@ -396,14 +396,27 @@ extern "system" {
 pub struct MAGTRANSFORM {
     pub v: [f32; 9],
 }
-#[cfg_attr(windows, link(name = "magnification", kind = "raw-dylib"))]
+// The Magnification API is NOT linked: magnification.dll pulls in Direct3D 9 + the graphics driver (~90 MB on AMD)
+// for the rest of the process' life. Only the zoom helper (`aimdot --zoom-host`, win/zoom_host.rs) loads it, with
+// LoadLibraryW + GetProcAddress, so aimdot.exe's import table doesn't name it.
+pub type MagInitializeFn = unsafe extern "system" fn() -> i32;
+pub type MagSetWindowSourceFn = unsafe extern "system" fn(h: isize, r: RECT) -> i32;
+pub type MagSetWindowTransformFn = unsafe extern "system" fn(h: isize, t: *const MAGTRANSFORM) -> i32;
+pub type MagSetWindowFilterListFn = unsafe extern "system" fn(h: isize, mode: u32, count: i32, list: *const isize) -> i32;
+#[cfg_attr(windows, link(name = "kernel32", kind = "raw-dylib"))]
 extern "system" {
-    pub fn MagInitialize() -> i32;
-    pub fn MagUninitialize() -> i32;
-    pub fn MagSetWindowSource(h: isize, r: RECT) -> i32;
-    pub fn MagSetWindowTransform(h: isize, t: *const MAGTRANSFORM) -> i32;
-    pub fn MagSetWindowFilterList(h: isize, mode: u32, count: i32, list: *const isize) -> i32;
+    pub fn LoadLibraryW(name: *const u16) -> isize;
+    pub fn GetProcAddress(module: isize, name: *const u8) -> *const c_void;
+    pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
 }
+#[cfg_attr(windows, link(name = "user32", kind = "raw-dylib"))]
+extern "system" {
+    pub fn GetWindowThreadProcessId(h: isize, pid: *mut u32) -> u32;
+    pub fn IsWindow(h: isize) -> i32;
+}
+pub const SYNCHRONIZE: u32 = 0x0010_0000;
+/// CreateWindowExW parent for a message-only window (no z-order, never shown, but PostMessage reaches it).
+pub const HWND_MESSAGE: isize = -3;
 pub const SRCCOPY: u32 = 0x00CC_0020;
 pub const LWA_ALPHA: u32 = 2;
 pub const WS_CHILD: u32 = 0x4000_0000;

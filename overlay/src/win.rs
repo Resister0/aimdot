@@ -9,6 +9,8 @@
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
 mod ffi;
+/// The zoom helper process (`aimdot --zoom-host`): owns the magnifier, so this process never loads it.
+pub mod zoom_host;
 
 use crate::ctl::{Ctl, Ev, Out};
 use crate::gamebar;
@@ -34,15 +36,10 @@ const FADE_IN: Duration = Duration::from_millis(120);
 const FADE_OUT: Duration = Duration::from_millis(150);
 /// Smart outline (#36): read what's behind the centre 10 times a second, only while the feature is on + shown.
 const TIMER_CONTRAST: usize = 4;
-/// Zoom (#15): refresh the magnifier + check the key ~60 times a second, only while zoomed.
+/// Zoom (#15): check the key / aim ~60 times a second, only while zoomed (the helper refreshes the lens itself).
 const TIMER_ZOOM: usize = 5;
-/// Zoom: the magnifier is let go this long after the last zoom ended (one-shot).
-const TIMER_ZOOM_FREE: usize = 6;
-/// The magnifier pulls in Direct3D 9 + the graphics driver (AMD: ~85 MB of private memory measured, 11 Nov 2026,
-/// against 2.6 MB for the overlay without it) and keeps them until it's let go. Kept ready a few minutes after
-/// a zoom (the first zoom after a release sets it up again: a short delay on that one press).
-const ZOOM_FREE_MS: u32 = 180_000;
-const CLASS_ZOOM: &str = "AimdotZoom";
+/// A started zoom helper that hasn't said "ready" after this long is given up (the next press starts another).
+const ZOOM_SPAWN_WAIT: Duration = Duration::from_secs(5);
 const CLASS_MAIN: &str = "AimdotMain";
 const CLASS_OVERLAY: &str = "AimdotOverlay";
 const AUTOSTART_NAME: &str = "Aimdot";
@@ -121,14 +118,10 @@ struct State {
     contrast: bool,
     smp_dc: isize,
     smp_bits: *mut u32,
-    /// Zoom: host window + Magnifier control (made on first use), zoomed right now, the key's vk.
-    zoom_host: isize,
-    zoom_mag: isize,
-    /// The ring at the lens' edge (own layered window, between the lens and the crosshair), the lens size in
-    /// physical px, and what the ring was last drawn for (size, round, colour).
-    zoom_ring: isize,
-    zoom_px: i32,
-    ring_key: (i32, bool, u32),
+    /// Zoom: the helper process' window (0 = no helper ready), when a helper was started that isn't ready yet,
+    /// zoomed right now (the key's vk). The magnifier itself lives in the helper (win/zoom_host.rs).
+    zoom_helper: isize,
+    zoom_spawned: Option<Instant>,
     zooming: Option<u32>,
 }
 
@@ -836,83 +829,63 @@ unsafe fn contrast_step(st: &mut State) {
 // ---------------------------------------------------------------- hold to zoom (#15)
 // Magnification API: a click-through topmost window with a Magnifier control around the centre, while the key is
 // held; the crosshair window stays on top of it and isn't magnified (filter list). Works over windowed /
-// borderless games (what DWM composes), not exclusive fullscreen. ⚠ Not run on Windows yet.
+// borderless games (what DWM composes), not exclusive fullscreen.
+//
+// The magnifier runs in a helper process (`aimdot --zoom-host`, win/zoom_host.rs): it pulls in Direct3D 9 + the
+// graphics driver (AMD: ~90 MB private, 11 Nov 2026), which Windows keeps loaded for the life of a process. This
+// process keeps the logic (key, hold / toggle, only while aiming, wheel) and stays at ~3 MB; the helper is started
+// on a zoom press, shows the lens as soon as it's ready, and quits by itself ~3 min after the last zoom.
+
+/// Starts the zoom helper unless one is running or starting. It posts ZM_READY when the magnifier is set up.
+unsafe fn zoom_spawn(st: &mut State) {
+    if st.zoom_helper != 0 || st.zoom_spawned.is_some_and(|t| t.elapsed() < ZOOM_SPAWN_WAIT) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut cmd = std::process::Command::new(exe);
+    // Its environment is this one's: a test copy (CROSSHAIR_HOME) gets its own helper, tied to its own windows.
+    cmd.arg("--zoom-host").arg(st.hwnd.to_string()).arg(st.overlay.to_string());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(NORMAL_PRIORITY_CLASS); // not the overlay's idle priority (Efficiency mode): a smooth lens
+    }
+    match cmd.spawn() {
+        Ok(_) => st.zoom_spawned = Some(Instant::now()), // (dropping the Child only closes its handles)
+        Err(e) => crosshair_core::log::line("zoom", &format!("can't start the zoom helper: {e}")),
+    }
+}
+
+/// Tells the helper to show the lens: level, size, shape, ring colour, centred on the crosshair.
+unsafe fn zoom_show(st: &mut State) {
+    let set = &st.ctl.m.set;
+    // Lens: % of the monitor's height (22 % = about 6 cm on a 24" screen), centred on the crosshair.
+    let size = ((monitor_height(st).unwrap_or(1080) as f32 * set.zoom_size / 100.0).round() as i32).clamp(64, 4000);
+    let c = set.zoom_ring;
+    let rgb = (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32;
+    let (cx, cy) = (st.pos.0 + st.dib_size.0 / 2, st.pos.1 + st.dib_size.1 / 2);
+    let level = (set.zoom_level * 100.0).round() as usize;
+    let show = zoom_host::pack_show(size, set.zoom_round, rgb);
+    let ok = PostMessageW(st.zoom_helper, zoom_host::ZM_LEVEL, level, 0) != 0
+        && PostMessageW(st.zoom_helper, zoom_host::ZM_SHOW, show, zoom_host::pack_xy(cx, cy)) != 0;
+    if !ok {
+        // The helper just quit (idle): start a new one, it shows the lens when ready.
+        st.zoom_helper = 0;
+        zoom_spawn(st);
+    }
+}
 
 unsafe fn zoom_start(st: &mut State) {
     let hk = st.ctl.m.set.hk_zoom;
     if hk.vk == 0 || st.zooming.is_some() || !st.shown {
         return;
     }
-    KillTimer(st.hwnd, TIMER_ZOOM_FREE);
-    if st.zoom_host == 0 {
-        if MagInitialize() == 0 {
-            return;
-        }
-        let hinst = GetModuleHandleW(null());
-        let title = wide(crosshair_core::APP_NAME);
-        let cls = wide(CLASS_ZOOM);
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: 0,
-            lpfnWndProc: overlay_proc,
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: hinst,
-            hIcon: 0,
-            hCursor: 0,
-            hbrBackground: 0,
-            lpszMenuName: null(),
-            lpszClassName: cls.as_ptr(),
-            hIconSm: 0,
-        };
-        RegisterClassExW(&wc);
-        let host = CreateWindowExW(WS_EX_OVERLAY, cls.as_ptr(), title.as_ptr(), WS_POPUP, 0, 0, 64, 64, 0, 0, hinst, null_mut());
-        let ring = CreateWindowExW(WS_EX_OVERLAY, cls.as_ptr(), title.as_ptr(), WS_POPUP, 0, 0, 64, 64, 0, 0, hinst, null_mut());
-        if host == 0 || ring == 0 {
-            return;
-        }
-        SetLayeredWindowAttributes(host, 0, 255, LWA_ALPHA);
-        let mag = CreateWindowExW(0, wide("Magnifier").as_ptr(), null(), WS_CHILD | WS_VISIBLE, 0, 0, 64, 64, host, 0, hinst, null_mut());
-        if mag == 0 {
-            DestroyWindow(host);
-            DestroyWindow(ring);
-            return;
-        }
-        // Don't magnify the crosshair (it stays sharp on top), the ring or the magnifier itself.
-        let skip = [st.overlay, host, ring];
-        MagSetWindowFilterList(mag, MW_FILTERMODE_EXCLUDE, 3, skip.as_ptr());
-        // The lens + ring never show in recordings / clips / Discord screen shares / screenshots (only on your
-        // screen), like Scope X (user, 11 Nov 2026). Older Windows (before 10 2004) doesn't know it: shown as before.
-        for w in [host, ring] {
-            if SetWindowDisplayAffinity(w, WDA_EXCLUDEFROMCAPTURE) == 0 {
-                crosshair_core::log::line("zoom", "can't hide the zoom from screen capture (Windows older than 10 2004?)");
-            }
-        }
-        st.zoom_host = host;
-        st.zoom_mag = mag;
-        st.zoom_ring = ring;
-    }
-    let set = &st.ctl.m.set;
-    let l = set.zoom_level;
-    let t = MAGTRANSFORM { v: [l, 0.0, 0.0, 0.0, l, 0.0, 0.0, 0.0, 1.0] };
-    MagSetWindowTransform(st.zoom_mag, &t);
-    // Lens: % of the monitor's height (22 % = about 6 cm on a 24" screen), centred on the crosshair.
-    let size = ((monitor_height(st).unwrap_or(1080) as f32 * set.zoom_size / 100.0).round() as i32).clamp(64, 4000);
-    let round = set.zoom_round;
-    st.zoom_px = size;
-    let (cx, cy) = (st.pos.0 + st.dib_size.0 / 2, st.pos.1 + st.dib_size.1 / 2);
-    let (x0, y0) = (cx - size / 2, cy - size / 2);
-    SetWindowPos(st.zoom_host, HWND_TOPMOST, x0, y0, size, size, SWP_NOACTIVATE);
-    SetWindowPos(st.zoom_mag, 0, 0, 0, size, size, SWP_NOZORDER | SWP_NOACTIVATE);
-    // Round = a window region (the system owns the region afterwards); square = none.
-    SetWindowRgn(st.zoom_host, if round { CreateEllipticRgn(0, 0, size + 1, size + 1) } else { 0 }, 1);
-    draw_ring(st, size, round, (x0, y0));
-    // Order: lens, ring, crosshair on top.
-    ShowWindow(st.zoom_host, SW_SHOWNOACTIVATE);
-    SetWindowPos(st.zoom_ring, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    ShowWindow(st.zoom_ring, SW_SHOWNOACTIVATE);
-    SetWindowPos(st.overlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     st.zooming = Some(hk.vk);
+    if st.zoom_helper != 0 {
+        zoom_show(st);
+    } else {
+        zoom_spawn(st); // shows on ZM_READY (if the zoom is still on by then)
+    }
     if st.ctl.m.set.zoom_scroll {
         // The wheel comes as Raw Input (no input hook: the game still gets the wheel too).
         stop_polling(st, false);
@@ -920,8 +893,36 @@ unsafe fn zoom_start(st: &mut State) {
             set_raw_input(st, true);
         }
     }
-    zoom_step(st);
     SetTimer(st.hwnd, TIMER_ZOOM, 16, null());
+}
+
+/// The helper is set up (its window in `helper`).
+unsafe fn zoom_ready(st: &mut State, helper: isize, flags: isize) {
+    st.zoom_helper = helper;
+    let ms = st.zoom_spawned.take().map_or("?".into(), |t| t.elapsed().as_millis().to_string());
+    let hide = if flags & zoom_host::READY_NO_HIDE != 0 { ", can't hide it from screen capture (Windows older than 10 2004?)" } else { "" };
+    crosshair_core::log::line("zoom", &format!("magnifier ready in {ms} ms{hide}"));
+    if st.zooming.is_some() {
+        zoom_show(st);
+    }
+}
+
+/// The helper quit (`why` = zoom_host::BYE_*).
+unsafe fn zoom_bye(st: &mut State, helper: isize, why: isize) {
+    if st.zoom_helper != 0 && st.zoom_helper != helper {
+        return; // an older helper (a newer one is already ready)
+    }
+    st.zoom_helper = 0;
+    st.zoom_spawned = None;
+    let what = match why {
+        zoom_host::BYE_IDLE => "magnifier let go (not used for a while)",
+        zoom_host::BYE_NO_MAGNIFIER => "can't start the magnifier (MagInitialize failed)",
+        _ => "can't make the zoom windows",
+    };
+    crosshair_core::log::line("zoom", what);
+    if why == zoom_host::BYE_IDLE && st.zooming.is_some() {
+        zoom_spawn(st); // it quit just as a zoom started (that show was lost): a new one shows it
+    }
 }
 
 unsafe fn zoom_step(st: &mut State) {
@@ -932,86 +933,22 @@ unsafe fn zoom_step(st: &mut State) {
     let key_up = !set.zoom_toggle && GetAsyncKeyState(vk as i32) >= 0;
     if key_up || (set.zoom_aim_only && !aim_down(st)) || !st.shown {
         zoom_stop(st);
-        return;
     }
-    let half = (st.zoom_px as f32 / st.ctl.m.set.zoom_level / 2.0) as i32;
-    let (cx, cy) = (st.pos.0 + st.dib_size.0 / 2, st.pos.1 + st.dib_size.1 / 2);
-    MagSetWindowSource(st.zoom_mag, RECT { left: cx - half, top: cy - half, right: cx + half, bottom: cy + half });
-    InvalidateRect(st.zoom_mag, null(), 0);
 }
 
 unsafe fn zoom_stop(st: &mut State) {
     if st.zooming.take().is_some() {
         KillTimer(st.hwnd, TIMER_ZOOM);
-        ShowWindow(st.zoom_host, SW_HIDE);
-        ShowWindow(st.zoom_ring, SW_HIDE);
+        if st.zoom_helper != 0 {
+            PostMessageW(st.zoom_helper, zoom_host::ZM_HIDE, 0, 0); // its idle countdown starts
+        }
         if st.raw_input && !st.aim_on {
             set_raw_input(st, false);
         }
         if std::mem::take(&mut st.zoom_dirty) {
             st.ctl.changed_here(); // remember the zoom for next time (+ the settings window shows it)
         }
-        // test hook: CROSSHAIR_ZOOM_FREE_MS=<ms> (a test copy can check the release in seconds)
-        let ms = std::env::var("CROSSHAIR_ZOOM_FREE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(ZOOM_FREE_MS);
-        SetTimer(st.hwnd, TIMER_ZOOM_FREE, ms, null());
     }
-}
-
-/// Lets the magnifier go (its windows + MagUninitialize), so Direct3D and the graphics driver's memory are freed
-/// while nobody zooms. The next zoom sets it up again (zoom_start).
-unsafe fn zoom_free(st: &mut State) {
-    KillTimer(st.hwnd, TIMER_ZOOM_FREE);
-    if st.zooming.is_some() || st.zoom_host == 0 {
-        return;
-    }
-    DestroyWindow(st.zoom_host); // the Magnifier control is its child: destroyed with it
-    DestroyWindow(st.zoom_ring);
-    MagUninitialize();
-    st.zoom_host = 0;
-    st.zoom_mag = 0;
-    st.zoom_ring = 0;
-    st.ring_key = (0, false, 0);
-    crosshair_core::log::line("zoom", "magnifier let go (not used for a while)");
-}
-
-/// The 2 px ring at the lens' edge in its own colour (zoom_ring, white by default), so you see where the lens
-/// ends. Drawn only when the size, shape or colour changed (a per-pixel ARGB layered window; the lens itself can't
-/// be half transparent).
-unsafe fn draw_ring(st: &mut State, size: i32, round: bool, at: (i32, i32)) {
-    let c = st.ctl.m.set.zoom_ring;
-    let rgb = (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32;
-    let p = POINT { x: at.0, y: at.1 };
-    let sz = SIZE { cx: size, cy: size };
-    if st.ring_key == (size, round, rgb) {
-        UpdateLayeredWindow(st.zoom_ring, 0, &p, &sz, 0, null(), 0, &BLENDFUNCTION { op: 0, flags: 0, alpha: 255, format: 1 }, ULW_ALPHA);
-        return;
-    }
-    let dc = CreateCompatibleDC(0);
-    let mut bits: *mut c_void = null_mut();
-    let dib = CreateDIBSection(0, &bmi(size, size), 0, &mut bits, 0, 0);
-    if dc == 0 || dib == 0 || bits.is_null() {
-        return;
-    }
-    let old = SelectObject(dc, dib);
-    let px = std::slice::from_raw_parts_mut(bits as *mut u32, (size * size) as usize);
-    let (m, thick) = (size as f32 / 2.0, 2.0f32);
-    for y in 0..size {
-        for x in 0..size {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Distance inside the edge: round = from the circle, square = from the nearest side.
-            let inside = if round { m - ((fx - m).powi(2) + (fy - m).powi(2)).sqrt() } else { fx.min(fy).min(size as f32 - fx).min(size as f32 - fy) };
-            let a = if inside < 0.0 { 0.0 } else { (thick + 0.5 - inside).clamp(0.0, 1.0) * inside.min(1.0) };
-            let a8 = (a * 255.0).round() as u32;
-            // Premultiplied BGRA
-            px[(y * size + x) as usize] = a8 << 24 | (c.r as u32 * a8 / 255) << 16 | (c.g as u32 * a8 / 255) << 8 | (c.b as u32 * a8 / 255);
-        }
-    }
-    let zero = POINT::default();
-    UpdateLayeredWindow(st.zoom_ring, 0, &p, &sz, dc, &zero, 0, &BLENDFUNCTION { op: 0, flags: 0, alpha: 255, format: 1 }, ULW_ALPHA);
-    SelectObject(dc, old);
-    DeleteObject(dib);
-    DeleteDC(dc);
-    st.ring_key = (size, round, rgb);
 }
 
 /// The zoom key went down / up (Raw Input: the key still reaches the game and every other app).
@@ -1052,9 +989,9 @@ unsafe fn zoom_wheel(st: &mut State, delta: i16) {
     if z != s.zoom_level {
         s.zoom_level = z;
         st.zoom_dirty = true;
-        let t = MAGTRANSFORM { v: [z, 0.0, 0.0, 0.0, z, 0.0, 0.0, 0.0, 1.0] };
-        MagSetWindowTransform(st.zoom_mag, &t);
-        zoom_step(st);
+        if st.zoom_helper != 0 {
+            PostMessageW(st.zoom_helper, zoom_host::ZM_LEVEL, (z * 100.0).round() as usize, 0);
+        }
     }
 }
 
@@ -1187,6 +1124,10 @@ unsafe fn shutdown(st: &mut State) {
     if st.raw_input {
         set_raw_input(st, false);
     }
+    if st.zoom_helper != 0 {
+        PostMessageW(st.zoom_helper, WM_CLOSE, 0, 0); // (it also quits by itself when this process ends)
+        st.zoom_helper = 0;
+    }
     #[cfg(windows)]
     let _ = std::fs::remove_file(paths::port_file());
     crosshair_core::log::stop("quit");
@@ -1261,7 +1202,6 @@ unsafe extern "system" fn main_proc(hwnd: isize, msg: u32, wp: usize, lp: isize)
                     TIMER_FADE => fade_step(st),
                     TIMER_CONTRAST => contrast_step(st),
                     TIMER_ZOOM => zoom_step(st),
-                    TIMER_ZOOM_FREE => zoom_free(st),
                     _ => {}
                 }
             }
@@ -1273,6 +1213,18 @@ unsafe extern "system" fn main_proc(hwnd: isize, msg: u32, wp: usize, lp: isize)
                     PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 }
                 gamebar_flush(st);
+            }
+            return 0;
+        }
+        zoom_host::ZM_READY => {
+            if let Some(st) = state() {
+                zoom_ready(st, wp as isize, lp);
+            }
+            return 0;
+        }
+        zoom_host::ZM_BYE => {
+            if let Some(st) = state() {
+                zoom_bye(st, wp as isize, lp);
             }
             return 0;
         }
@@ -1501,11 +1453,8 @@ pub fn run(tray_only: bool, autostart: bool) {
             contrast: false,
             smp_dc: 0,
             smp_bits: null_mut(),
-            zoom_host: 0,
-            zoom_mag: 0,
-            zoom_ring: 0,
-            zoom_px: 0,
-            ring_key: (0, false, 0),
+            zoom_helper: 0,
+            zoom_spawned: None,
             zooming: None,
         }));
         STATE.store(st, Ordering::Relaxed);

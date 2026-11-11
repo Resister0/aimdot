@@ -5,6 +5,7 @@
 //! `aimdot --tray`       start without opening the settings window (the settings program starting the overlay)
 //! `aimdot --autostart`  start with the PC: opens the settings window unless "Start minimised" is on
 //! `aimdot --quit`       tell a running overlay to quit
+//! `aimdot --zoom-host <main> <crosshair>`  the zoom helper (Windows; started by the overlay, never by hand)
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod ctl;
@@ -35,6 +36,12 @@ fn main() {
         }));
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The zoom helper (Windows): a second process that owns the magnifier, started by the overlay (win/zoom_host.rs).
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "--zoom-host") {
+        win::zoom_host::run(&args[1..]);
+        return;
+    }
     if args.iter().any(|a| a == "--quit") {
         if !ipc_server::tell_running("quit") {
             eprintln!("aimdot: not running");
