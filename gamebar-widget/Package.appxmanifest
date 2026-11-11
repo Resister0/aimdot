@@ -16,12 +16,17 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
-  IgnorableNamespaces="uap uap3">
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  IgnorableNamespaces="uap uap3 mp">
 
   <Identity
     Name="Resister0.AimdotWidget"
     Publisher="CN=Resister0"
     Version="1.0.0.0" />
+
+  <!-- Visual Studio 18 (GitHub's Windows runner since Nov 2026) refuses a UWP manifest without PhoneIdentity (APPX1673,
+       first seen in the 1.0.1 build, 11 Nov 2026). Unused on PC; the id is a fixed random GUID, keep it. -->
+  <mp:PhoneIdentity PhoneProductId="bb1ed89b-b9cb-478d-b2e5-96a60a2f6e79" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
 
   <Properties>
     <DisplayName>Aimdot Game Bar widget</DisplayName>
