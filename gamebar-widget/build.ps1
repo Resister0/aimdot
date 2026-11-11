@@ -139,6 +139,7 @@ Copy-Item $built.FullName $final -Force
 # The framework packages go next to the MSIX (out\deps\): the installer ships them (widget-deps\) and passes them to
 # Add-AppxPackage -DependencyPath, because Windows editions without the Store / App Installer (LTSC) can't fetch a
 # missing framework - 1.0.3's widget needed .NET Native 2.3 and failed there with 0x80073CF3 (11 Nov 2026).
+# check-deps.ps1 also refuses packages without a valid Microsoft signature or with a hash other than the pinned one.
 $depDir = Join-Path $out 'deps'
 if (Test-Path $depDir) { Remove-Item $depDir -Recurse -Force }
 New-Item -ItemType Directory $depDir | Out-Null
@@ -147,9 +148,16 @@ Step "Framework packages for the installer: $depDir"
 $shipped = @(Get-ChildItem $depDir -File | ForEach-Object { $_.FullName })
 & (Join-Path $here 'check-deps.ps1') -Package $final -Deps $shipped
 if ($LASTEXITCODE -ne 0) {
-    # Not fatal: the widget still installs where Windows already has the frameworks (as before).
-    Write-Host "::warning::The widget's framework packages don't cover what its MSIX needs - it won't install on PCs without them (LTSC)"
-    $global:LASTEXITCODE = 0   # (a pwsh CI step ends with exit $LASTEXITCODE)
+    if ($Dev) {
+        Write-Host 'Warning: the framework packages above are incomplete - fine for trying it on this PC only.' -ForegroundColor Yellow
+        $global:LASTEXITCODE = 0
+    } else {
+        # Fatal (since 1.0.5): 1.0.4 shipped a widget whose .NET Native 2.3 framework wasn't in the box, and it
+        # failed to install on PCs without it. No widget is better than one that can't install: the release goes
+        # out without it (the CI widget step may fail; the installer step then leaves the widget out).
+        Remove-Item $final -Force
+        throw "The widget's framework packages (out\deps) don't cover what its MSIX needs (see MISSING / REFUSED above) - widget not built."
+    }
 }
 
 if ($NoSign) {

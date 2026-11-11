@@ -99,8 +99,19 @@
     <PackageReference Include="Microsoft.Gaming.XboxGameBar">
       <Version>7.3.2607010</Version>
     </PackageReference>
+    <!-- 6.2.14 (.NET Native 2.2), NOT 6.2.15: 6.2.15's compiler (2.2.15-rel-2605-2102) stamps .NET Native
+         Framework/Runtime 2.3 >= 2.3.60521.0 into the MSIX, but the only public 2.3 packages (its runtime package
+         and runtime.win10-x64.Microsoft.Net.Native.SharedLibrary 2.3.15-rel-2605-2102) are 2.3.60518.0 inside, so
+         the widget could only install where the Store had already put 2.3 on the PC (1.0.3 / 1.0.4: 0x80073CF3 on
+         an LTSC PC and on a normal one, 11-12 Nov 2026). 2.2 matches: Framework 2.2.29512.0, Runtime 2.2.28604.0. -->
     <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
-      <Version>6.2.15</Version>
+      <Version>6.2.14</Version>
+    </PackageReference>
+    <!-- The .NET Native 2.2 framework package itself (Microsoft.NET.Native.Framework.2.2.appx), so the build puts it
+         in Dependencies\x64 and the installer can ship it (build.ps1 -> out\deps). The same build (31116) as
+         6.2.14's compiler 2.2.12-rel-31116-00, which brings the runtime package. -->
+    <PackageReference Include="runtime.win10-x64.Microsoft.Net.Native.SharedLibrary" Condition="'$(Platform)' == 'x64'">
+      <Version>2.2.8-rel-31116-00</Version>
     </PackageReference>
   </ItemGroup>
   <!-- From Microsoft's sample: the Game Bar package picks its native parts by this -->

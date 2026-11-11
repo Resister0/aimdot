@@ -29,7 +29,7 @@
 !macroend
 
 ; The Game Bar widget (for exclusive-fullscreen DirectX games) - only in installers that carry the signed MSIX:
-; - normal install: ask; yes = install it (AimdotWidgetAdd), App Installer as the fallback
+; - normal install: ask; yes = install it (AimdotWidgetAdd); if that fails, a plain message
 ; - auto-update: refresh it only if it is installed already (no question)
 !macro NSIS_HOOK_POSTINSTALL
   ${If} ${FileExists} "$INSTDIR\AimdotWidget.msix"
@@ -47,17 +47,12 @@
     MessageBox MB_YESNO|MB_ICONQUESTION "Also install the Aimdot Game Bar widget?$\r$\n$\r$\nYou only need it for games in exclusive fullscreen (DirectX). Borderless and windowed games work without it. You can add it later from the Aimdot folder (AimdotWidget.msix)." IDNO aimdot_no_widget
       ; installed directly (no admin needed, the MSIX is signed): opening the .msix needs Windows' App Installer,
       ; which some Windows editions don't have (LTSC: an "open with" list with nothing to pick, 11 Nov 2026).
-      ; App Installer stays the fallback (it can also fetch a missing framework package).
+      ; If it fails: one plain line, no hand-off to App Installer (1.0.4: its own "installation failed ... depends
+      ; on a framework" dialog came up after the setup finished, 12 Nov 2026).
       DetailPrint "Installing the Game Bar widget..."
       !insertmacro AimdotWidgetAdd
       ${If} $0 <> 0
-        nsExec::Exec `powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-AppxPackage -Name Microsoft.DesktopAppInstaller) { exit 0 } else { exit 1 }"`
-        Pop $0
-        ${If} $0 = 0
-          ExecShell "open" "$INSTDIR\AimdotWidget.msix"
-        ${Else}
-          MessageBox MB_OK|MB_ICONEXCLAMATION "The Game Bar widget couldn't be installed on this PC. Aimdot itself works; the widget is only needed for exclusive-fullscreen games."
-        ${EndIf}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "The Game Bar widget couldn't be installed on this PC. Aimdot itself works; the widget is only for exclusive-fullscreen games."
       ${EndIf}
     aimdot_no_widget:
   ${EndIf}
