@@ -403,6 +403,8 @@ pub type MagInitializeFn = unsafe extern "system" fn() -> i32;
 pub type MagSetWindowSourceFn = unsafe extern "system" fn(h: isize, r: RECT) -> i32;
 pub type MagSetWindowTransformFn = unsafe extern "system" fn(h: isize, t: *const MAGTRANSFORM) -> i32;
 pub type MagSetWindowFilterListFn = unsafe extern "system" fn(h: isize, mode: u32, count: i32, list: *const isize) -> i32;
+/// dwmapi's DwmFlush (HRESULT): waits for the next screen refresh. Also loaded by the zoom helper only.
+pub type DwmFlushFn = unsafe extern "system" fn() -> i32;
 #[cfg_attr(windows, link(name = "kernel32", kind = "raw-dylib"))]
 extern "system" {
     pub fn LoadLibraryW(name: *const u16) -> isize;
@@ -413,6 +415,7 @@ extern "system" {
 extern "system" {
     pub fn GetWindowThreadProcessId(h: isize, pid: *mut u32) -> u32;
     pub fn IsWindow(h: isize) -> i32;
+    pub fn UpdateWindow(h: isize) -> i32;
 }
 pub const SYNCHRONIZE: u32 = 0x0010_0000;
 /// CreateWindowExW parent for a message-only window (no z-order, never shown, but PostMessage reaches it).

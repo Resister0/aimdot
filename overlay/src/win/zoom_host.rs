@@ -41,7 +41,6 @@ pub const BYE_NO_WINDOW: isize = 2;
 /// The helper quits this long after the last zoom ended (or after it started, if no zoom came). The next zoom
 /// starts it again (a short delay on that one press).
 pub const IDLE_MS: u32 = 180_000;
-const TIMER_REFRESH: usize = 1;
 const TIMER_IDLE: usize = 2;
 const CLASS_LENS: &str = "AimdotZoom";
 const CLASS_CTL: &str = "AimdotZoomHost";
@@ -69,7 +68,13 @@ struct Host {
     mag: isize,
     ring: isize,
     api: Mag,
+    /// DwmFlush (dwmapi.dll, loaded here only): waits for the next screen refresh (fallback pacing, wait_frame).
+    flush: Option<DwmFlushFn>,
+    /// The zoom shown now, the newest zoom asked for (ZM_LEVEL; taken on the next frame), and what the magnifier
+    /// has (0 = nothing set yet).
     level: f32,
+    target: f32,
+    applied: f32,
     size: i32,
     centre: (i32, i32),
     shown: bool,
@@ -100,10 +105,8 @@ unsafe extern "system" fn ctl_proc(h: isize, msg: u32, wp: usize, lp: isize) -> 
     let Some(st) = host() else { return DefWindowProcW(h, msg, wp, lp) };
     match msg {
         ZM_LEVEL => {
-            st.level = (wp as f32 / 100.0).clamp(1.0, 16.0);
-            let l = st.level;
-            (st.api.transform)(st.mag, &MAGTRANSFORM { v: [l, 0.0, 0.0, 0.0, l, 0.0, 0.0, 0.0, 1.0] });
-            refresh(st);
+            // Only the goal: the next frame takes it (wheel ticks that come faster than frames count once).
+            st.target = (wp as f32 / 100.0).clamp(1.0, 16.0);
             0
         }
         ZM_SHOW => {
@@ -115,10 +118,8 @@ unsafe extern "system" fn ctl_proc(h: isize, msg: u32, wp: usize, lp: isize) -> 
             0
         }
         WM_TIMER => {
-            match wp {
-                TIMER_REFRESH => refresh(st),
-                TIMER_IDLE => quit(st, BYE_IDLE),
-                _ => {}
+            if wp == TIMER_IDLE {
+                quit(st, BYE_IDLE);
             }
             0
         }
@@ -149,35 +150,79 @@ unsafe fn show(st: &mut Host, size: i32, round: bool, rgb: u32, centre: (i32, i3
     // Round = a window region (the system owns the region afterwards); square = none.
     SetWindowRgn(st.lens, if round { CreateEllipticRgn(0, 0, size + 1, size + 1) } else { 0 }, 1);
     draw_ring(st, size, round, rgb, (x0, y0));
-    refresh(st); // the first picture before the lens shows (no flash of an old one)
+    st.level = st.target;
+    apply(st); // the first picture before the lens shows (no flash of an old one)
     // Order: lens, ring, crosshair on top (the overlay's own window, raised from here).
     ShowWindow(st.lens, SW_SHOWNOACTIVATE);
     SetWindowPos(st.ring, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     ShowWindow(st.ring, SW_SHOWNOACTIVATE);
     SetWindowPos(crosshair_window(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    st.shown = true;
-    // ~60 refreshes a second while shown (the Magnifier control only redraws when invalidated).
-    SetTimer(st.ctl, TIMER_REFRESH, 16, null());
+    st.shown = true; // the loop in run() now redraws it frame by frame (frame + wait_frame)
 }
 
 unsafe fn hide(st: &mut Host) {
     if st.shown {
         st.shown = false;
-        KillTimer(st.ctl, TIMER_REFRESH);
         ShowWindow(st.lens, SW_HIDE);
         ShowWindow(st.ring, SW_HIDE);
     }
     SetTimer(st.ctl, TIMER_IDLE, st.idle_ms, null());
 }
 
-unsafe fn refresh(st: &mut Host) {
+/// One frame while the lens shows: the newest zoom goal (wheel ticks that came since the last frame count once),
+/// then a new picture. No glide between levels: a zoom change (MagSetWindowTransform) is the expensive part of a
+/// frame (measured 11 Nov 2026: 25 ms on average, up to 35 ms, against 12 ms for a normal frame), so it happens
+/// once per wheel step, never on every frame of an animation.
+unsafe fn frame(st: &mut Host) {
+    st.level = st.target;
+    apply(st);
+}
+
+/// Sets the zoom + the part of the screen to show, and draws it now. The source is rounded UP, so source x zoom
+/// always fills the lens (rounded down it left a 1-9 px black edge at the right / bottom that changed with every
+/// wheel step). On a zoom change the two calls go in the order that never has less picture than lens in between:
+/// zooming in = zoom first (the old, larger source just overflows), zooming out = the larger source first.
+unsafe fn apply(st: &mut Host) {
     if st.size == 0 {
         return;
     }
-    let half = (st.size as f32 / st.level / 2.0) as i32;
+    let l = st.level;
+    let w = ((st.size as f32 / l).ceil() as i32).max(1);
     let (cx, cy) = st.centre;
-    (st.api.source)(st.mag, RECT { left: cx - half, top: cy - half, right: cx + half, bottom: cy + half });
+    let src = RECT { left: cx - w / 2, top: cy - w / 2, right: cx - w / 2 + w, bottom: cy - w / 2 + w };
+    let t = MAGTRANSFORM { v: [l, 0.0, 0.0, 0.0, l, 0.0, 0.0, 0.0, 1.0] };
+    if l != st.applied {
+        if l > st.applied {
+            (st.api.transform)(st.mag, &t);
+            (st.api.source)(st.mag, src);
+        } else {
+            (st.api.source)(st.mag, src);
+            (st.api.transform)(st.mag, &t);
+        }
+        st.applied = l;
+    } else {
+        (st.api.source)(st.mag, src);
+    }
     InvalidateRect(st.mag, null(), 0);
+    UpdateWindow(st.mag); // paint now, not whenever WM_PAINT comes round
+}
+
+/// Paces the frame loop. The Magnifier control's paint itself waits for its own present, which runs at 60 Hz
+/// (measured on a 240 Hz AMD screen, 11 Nov 2026: UpdateWindow takes 16.6 ms, so the loop draws 60 pictures a
+/// second; an extra DwmFlush after it only made frames late: 20.5 ms). The old 16 ms window timer really ticked
+/// every ~31 ms (Windows timers step in 15.6 ms, jitter up to 46 ms): ~32 pictures a second, which looked laggy,
+/// worst while the zoom changed. Only if a paint came back early (`drawn_ms` < 4: e.g. a driver that doesn't
+/// wait), wait for the next screen refresh (DwmFlush), so the loop never spins; no DwmFlush: ~8 ms sleeps.
+unsafe fn wait_frame(st: &Host, drawn_ms: f32) {
+    if drawn_ms >= 4.0 {
+        return;
+    }
+    if let Some(flush) = st.flush {
+        if flush() >= 0 {
+            return;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(8));
 }
 
 static CROSSHAIR: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
@@ -317,7 +362,11 @@ pub fn run(args: &[String]) {
             mag,
             ring,
             api,
+            // dwmapi.dll only in here too (the overlay itself doesn't load it).
+            flush: sym(LoadLibraryW(wide("dwmapi.dll").as_ptr()), b"DwmFlush\0"),
             level: 2.0,
+            target: 2.0,
+            applied: 0.0,
             size: 0,
             centre: (0, 0),
             shown: false,
@@ -334,7 +383,10 @@ pub fn run(args: &[String]) {
         let n = (parent != 0) as u32;
         let mut msg: MSG = std::mem::zeroed();
         'run: loop {
-            let r = MsgWaitForMultipleObjectsEx(n, &parent, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            // Lens hidden: sleep until a message (or the overlay's end). Shown: only look, then draw a frame below.
+            let shown = host().is_some_and(|st| st.shown);
+            let wait = if shown { 0 } else { INFINITE };
+            let r = MsgWaitForMultipleObjectsEx(n, &parent, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             if n == 1 && r == WAIT_OBJECT_0 {
                 if let Some(st) = host() {
                     hide(st);
@@ -347,6 +399,12 @@ pub fn run(args: &[String]) {
                 }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+            // One picture per frame while the lens shows (messages wait at most one frame, ~17 ms).
+            if let Some(st) = host().filter(|st| st.shown) {
+                let t = std::time::Instant::now();
+                frame(st);
+                wait_frame(st, t.elapsed().as_secs_f32() * 1000.0);
             }
         }
         // Process exit frees the windows, the magnifier and the driver; no MagUninitialize needed.

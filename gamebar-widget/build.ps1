@@ -127,14 +127,30 @@ try {
 $built = Get-ChildItem $pkgDir -Recurse -Filter *.msix | Where-Object { $_.FullName -notmatch '\\Dependencies\\' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $built) { throw "No .msix found in $pkgDir" }
-# Framework packages the widget needs (.NET Native runtime, VC libs). Windows usually has them already; they are
-# passed to Add-AppxPackage in case it doesn't.
+# Framework packages the widget needs (.NET Native framework + runtime, VC libs). Windows often has them already;
+# they are passed to Add-AppxPackage in case it doesn't, and shipped with the installer (out\deps\, below).
 $deps = @(Get-ChildItem $pkgDir -Recurse -Include *.appx, *.msix -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match "\\Dependencies\\$Platform\\" } | ForEach-Object { $_.FullName })
 
 $version = ([xml](Get-Content $manifest)).Package.Identity.Version
 $final = Join-Path $out ("AimdotWidget-$version-$Platform" + $(if ($Dev) { '-dev' } elseif ($NoSign) { '-unsigned' } else { '' }) + '.msix')
 Copy-Item $built.FullName $final -Force
+
+# The framework packages go next to the MSIX (out\deps\): the installer ships them (widget-deps\) and passes them to
+# Add-AppxPackage -DependencyPath, because Windows editions without the Store / App Installer (LTSC) can't fetch a
+# missing framework - 1.0.3's widget needed .NET Native 2.3 and failed there with 0x80073CF3 (11 Nov 2026).
+$depDir = Join-Path $out 'deps'
+if (Test-Path $depDir) { Remove-Item $depDir -Recurse -Force }
+New-Item -ItemType Directory $depDir | Out-Null
+foreach ($d in $deps) { Copy-Item $d $depDir -Force }
+Step "Framework packages for the installer: $depDir"
+$shipped = @(Get-ChildItem $depDir -File | ForEach-Object { $_.FullName })
+& (Join-Path $here 'check-deps.ps1') -Package $final -Deps $shipped
+if ($LASTEXITCODE -ne 0) {
+    # Not fatal: the widget still installs where Windows already has the frameworks (as before).
+    Write-Host "::warning::The widget's framework packages don't cover what its MSIX needs - it won't install on PCs without them (LTSC)"
+    $global:LASTEXITCODE = 0   # (a pwsh CI step ends with exit $LASTEXITCODE)
+}
 
 if ($NoSign) {
     Write-Host ''

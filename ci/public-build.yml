@@ -130,6 +130,13 @@ jobs:
           }
           $m = Get-ChildItem gamebar-widget\out -Filter 'AimdotWidget-*.msix' | Where-Object { $_.Name -notmatch '-(unsigned|dev)\.msix$' } | Select-Object -First 1
           if ($m) { Copy-Item $m.FullName "AimdotWidget-x64.msix"; Get-Item AimdotWidget-x64.msix }
+          # its framework packages (.NET Native, VC libs; build.ps1 puts them in out\deps\): the installer ships them
+          # as widget-deps\ for Add-AppxPackage -DependencyPath (PCs without Store / App Installer can't fetch them)
+          if ($m -and (Test-Path gamebar-widget\out\deps)) {
+            New-Item -ItemType Directory -Force widget-deps | Out-Null
+            Copy-Item gamebar-widget\out\deps\* widget-deps\
+            Get-ChildItem widget-deps
+          }
       - name: Installer (Aimdot-Setup.exe)
         # Echo's method: Tauri's NSIS bundler used ONLY as a packer (`tauri bundle` builds nothing) - installer/
         # (tauri.conf.json, hooks.nsh, header/sidebar pictures, notice.txt; Cargo.toml there is a never-built stub the
@@ -150,7 +157,14 @@ jobs:
           # the licence page's first line says which Aimdot it installs: "Aimdot 0.1.4 - ..."
           sed -i "1s/^Aimdot /Aimdot $V /" notice.txt && head -n 1 notice.txt
           RES='"../target/release/aimdot-settings.exe":"aimdot-settings.exe","../LICENSE":"LICENSE.txt"'
-          if [ -f ../AimdotWidget-x64.msix ]; then RES="$RES"',"../AimdotWidget-x64.msix":"AimdotWidget.msix"'; echo "Game Bar widget goes into the installer"; fi
+          if [ -f ../AimdotWidget-x64.msix ]; then
+            RES="$RES"',"../AimdotWidget-x64.msix":"AimdotWidget.msix"'; echo "Game Bar widget goes into the installer"
+            # its framework packages -> $INSTDIR\widget-deps\ (hooks.nsh passes them to Add-AppxPackage -DependencyPath)
+            for f in ../widget-deps/*.appx ../widget-deps/*.msix; do
+              [ -f "$f" ] || continue
+              RES="$RES"',"'"$f"'":"widget-deps/'"$(basename "$f")"'"'; echo "  + widget-deps/$(basename "$f")"
+            done
+          fi
           SIGN=""
           if [ -n "$SIGNTOOL" ] && [ -n "$CERT_SHA1" ]; then
             ST=$(printf '%s' "$SIGNTOOL" | tr '\\\\' '/')
