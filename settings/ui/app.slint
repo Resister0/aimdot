@@ -1,0 +1,1350 @@
+// Aimdot settings window. Rust (src/main.rs) owns the state (crosshair-core's Model) and pushes it into the
+// global S; every change goes back through S's callbacks with config.ini's key names, so Rust can set it with
+// the same code that reads config.ini.
+import { T, Ic, Icon, Btn, Switch, Slider, Seg, Opt, NavBtn, TopGlow, Card, Row, Note, ColorPick, Edge, ThemeCard, ThemeLine, ThemeTile, LiftTile, Find, Tip, TipLayer, Toast, ToastLayer } from "theme.slint";
+import { TopBar } from "topbar.slint";
+// the Images + Painter pages (aimdot-painter session: images.slint / painter.slint, src/images.rs / painter.rs)
+import { ImagesPage, Imgs, PIc } from "images.slint";
+import { PainterPage, Paint } from "painter.slint";
+// the Profiles page (aimdot-profiles session: profiles.slint, src/profiles.rs)
+import { ProfilesPage, Profs, PrIc } from "profiles.slint";
+export { Imgs, Paint, Profs }
+// auto-update (the release session: update.slint, src/update.rs)
+import { Upd, UpdateBanner, UpdateCard } from "update.slint";
+export { Upd }
+export { T, Find, Toast } // Rust puts the theme's colours in here (src/theme.rs)
+import { ScrollView } from "std-widgets.slint";
+
+export struct Prof {
+    color: color,
+    opacity: float,
+    rainbow: bool,
+    rainbow-mode: int,
+    rainbow-speed: float,
+    rainbow-sat: float,
+    outline: bool,
+    outline-thick: float,
+    outline-color: color,
+    outline-opacity: float,
+    dot: bool,
+    dot-size: float,
+    dot-round: bool,
+    dot-opacity: float,
+    inner: bool,
+    inner-len: float,
+    inner-thick: float,
+    inner-gap: float,
+    inner-opacity: float,
+    outer: bool,
+    outer-len: float,
+    outer-thick: float,
+    outer-gap: float,
+    outer-opacity: float,
+    circle: bool,
+    circle-radius: float,
+    circle-thick: float,
+    circle-opacity: float,
+    t-style: bool,
+    rotation: float,
+    scale: float,
+    is-image: bool,
+}
+
+// a test-range background for the preview (src/range.rs draws them)
+export struct Backdrop {
+    name: string,
+    img: image,
+    value: int,      // a built-in one: its number (preview_bg); your own picture: -1
+    file: string,    // your own picture's file in backgrounds/ ("" = built-in)
+}
+
+// the "More presets" gallery (core/src/presets_more.rs): one section = a header + its tiles
+export struct GalItem {
+    name: string,
+    img: image,
+    on: bool,
+    idx: int,
+}
+export struct GalSection {
+    title: string,
+    items: [GalItem],
+}
+
+export struct Preset {
+    name: string,
+    img: image,
+    on: bool,
+}
+
+export global S {
+    in-out property <int> page: 0;        // 0 Designer, 1 Settings (2 / 3 = Settings > About / Appearance), 4 Images, 5 Painter, 6 Profiles
+    in-out property <string> sec: "overlay"; // the Settings section: overlay / hotkeys / appearance / start / about
+    in property <Prof> p;
+    // overlay settings
+    in property <bool> overlay-on;
+    in property <int> monitor;
+    in property <float> offset-x;
+    in property <float> offset-y;
+    in property <int> aim-mode;        // 0 always, 1 only while aiming, 2 hide while aiming
+    in property <int> display-mode;
+    in property <bool> eco;
+    // overlay extras (aimdot-feel, docs/overlay-extras.md)
+    in property <int> size-mode;           // 0 fixed pixels, 1 % of the screen height
+    in property <bool> monitor-follow;
+    in property <bool> hide-cursor;        // Windows
+    in property <bool> show-fade;
+    in property <bool> smart-outline;      // Windows
+    in property <int> zoom-level: 2;       // Windows: 2 / 3 / 4
+    in property <bool> zoom-scroll;        // Windows
+    in property <color> zoom-ring: white;  // Windows: the ring at the zoom lens' edge
+    in property <bool> autostart;          // "Start with my PC" (config key autostart, default off)
+    in property <string> autostart-note;   // Linux: "another Aimdot already starts …" etc.
+    in property <bool> start-minimized;    // started with the PC: stay in the tray (default off = the window opens)
+    in property <[Opt]> monitors;
+    // facts from the overlay
+    in property <string> conn: "starting"; // "ok", "starting", "offline"
+    in property <string> platform;
+    in property <string> aim-status;   // "ok", "no-permission", "none", "off"
+    in property <string> gamebar;
+    // hotkeys: names ("Ctrl + Alt + X" / "Not set"), registered OK, which row is listening (-1 = none)
+    // hotkeys: 0 toggle, 1 next, 2 previous, 3 settings, 4-7 nudge up / down / left / right, 8 hold to zoom (Windows)
+    in property <[string]> hk-names: ["", "", "", "", "", "", "", "", ""];
+    in property <[bool]> hk-ok: [true, true, true, true, true, true, true, true, true];
+    in property <int> hk-capture: -1;
+    // Linux with the KDE shortcuts portal: "kde" = KDE owns the keys (hk-kde = what KDE really uses, "" = none),
+    // "unavailable" = no portal and no readable keyboard; "" = the overlay owns the keys itself (hk-ok as usual)
+    in property <string> hk-kde-state;
+    in property <[string]> hk-kde: ["", "", "", "", "", "", "", ""];      // from the overlay: "" (not reported), "missing", or the widget status
+    in property <bool> is-windows;
+    in property <string> version;
+    in property <string> anticheat;
+    // preview
+    in property <image> preview;
+    in property <int> preview-bg: 0;
+    in property <int> preview-zoom: 1;
+    in property <[Backdrop]> backdrops;
+    in property <int> bg-rows: 4;
+    in property <string> preview-img;   // your own background picture ("" = a built-in one)
+    in property <string> bg-status;     // "Choose a picture…" / an import error
+    in property <bool> pan;      // slow pan (not saved)
+    in property <int> cvd;       // colour-blind view: 0 off, 1 deutan, 2 protan, 3 tritan (not saved)
+    in property <[Preset]> presets;
+    in-out property <bool> gallery;           // the Designer shows the "More presets" gallery
+    in property <[GalSection]> gal;
+    in property <int> gal-count;              // how many there are in all
+    in-out property <string> gal-q;
+    callback gal-search(string);
+    callback gal-pick(int);
+    // the open colour picker: "" / "color" / "outline_color"
+    in property <string> pick-key;
+    in property <float> ph;
+    in property <float> ps;
+    in property <float> pv;
+    in property <string> phex;
+    // the window's look (Echo's themes, src/theme.rs): theme id, the cards, the show / hide hotkey's keys for the top bar
+    in property <string> ui-theme;
+    in property <bool> ui-accent-rgb;      // custom theme: the accent / background cycle through the rainbow (RGB)
+    in property <bool> ui-bg-rgb;
+    in property <[ThemeLine]> themes;
+    in property <[string]> hk-keys;
+    callback num(string, float);
+    callback flag(string, bool);
+    callback open-picker(string);
+    callback pick(string, float, float, float);
+    callback hex(string, string);
+    callback set-color(string, color);   // a swatch: key, colour
+    callback set-theme(string);
+    callback theme-reset();
+    callback bg-pick(string);
+    callback bg-remove(string);
+    callback bg-add();
+    callback open-log-folder();
+    callback copy-log();
+    in-out property <string> log-note;
+    callback preset(int);
+    callback randomize();
+    callback reset-design();
+    callback hk-start(int);
+    callback hk-key(int, string, bool, bool, bool, bool); // row, key text, ctrl, alt, shift, meta
+    callback hk-cancel();
+    callback hk-clear(int);          // remove a hotkey (Esc while capturing, or its ×)
+    callback start-overlay();
+    callback quit-overlay();
+}
+
+// one slider row: label, value, slider. unit: 0 = px, 1 = %, 2 = x, 3 = degrees
+component SRow inherits Row {
+    in property <string> key;
+    in property <float> value;
+    in property <float> lo;
+    in property <float> hi: 1;
+    in property <float> step: 1;
+    in property <int> unit;
+    val: root.unit == 1 ? round(root.value * 100) + " %" : root.unit == 2 ? (round(root.value * 100) / 100) + "×" : root.unit == 3 ? round(root.value) + "°" : round(root.value) + " px";
+    Slider {
+        y: (parent.height - self.height) / 2;
+        width: 210px;
+        value: root.value;
+        lo: root.lo;
+        hi: root.hi;
+        step: root.step;
+        moved(v) => { S.num(root.key, v); }
+    }
+}
+
+component SwRow inherits Row {
+    in property <string> key;
+    in property <bool> on;
+    Switch {
+        y: (parent.height - self.height) / 2;
+        on: root.on;
+        toggled(v) => { S.flag(root.key, v); }
+    }
+}
+
+// colour row: quick swatches + the current colour; click it to open the picker under the row
+component ColorRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> key;
+    in property <color> value;
+    in property <[color]> swatches: [#ffffff, #00ff7f, #39ff14, #00e5ff, #3b82f6, #ffe600, #ff9500, #ff2d55, #ff00ff, #000000];
+    in property <string> rgb-key;   // the switch that makes this colour RGB ("" = no RGB for this colour)
+    in property <bool> rgb;
+    property <bool> open: S.pick-key == root.key;
+    spacing: 8px;
+    Row {
+        label: root.label;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: end;
+            for c in root.swatches: Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: c;
+                border-width: 1px;
+                border-color: root.value == c ? T.text : T.line;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { S.set-color(root.key, c); }
+                }
+            }
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 44px;
+                height: 26px;
+                border-radius: T.r-small;
+                background: root.value;
+                border-width: 2px;
+                border-color: root.open ? T.accent : T.hover;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { S.open-picker(root.open ? "" : root.key); }
+                }
+            }
+        }
+    }
+    if root.open: ColorPick {
+        h: S.ph;
+        s: S.ps;
+        v: S.pv;
+        cur: root.value;
+        hex: S.phex;
+        rgb-ok: root.rgb-key != "";
+        rgb: root.rgb;
+        changed(h, s, v) => { S.pick(root.key, h, s, v); }
+        hex-entered(t) => { S.hex(root.key, t); }
+        toggle-rgb => { S.flag(root.rgb-key, !root.rgb); }
+    }
+}
+
+component Rainbow inherits VerticalLayout {
+    SwRow { label: "RGB rainbow"; key: "rainbow"; on: S.p.rainbow; }
+    if S.p.rainbow: Row {
+        label: "Rainbow style";
+        Seg {
+            y: (parent.height - self.height) / 2;
+            opts: [{ label: "Cycle", value: 0 }, { label: "Wave", value: 1 }, { label: "Spin", value: 2 }];
+            value: S.p.rainbow-mode;
+            picked(v) => { S.num("rainbow_mode", v); }
+        }
+    }
+    if S.p.rainbow: SRow { label: "Rainbow speed"; key: "rainbow_speed"; value: S.p.rainbow-speed; lo: 0.1; hi: 5; step: 0.1; unit: 2; }
+    if S.p.rainbow: SRow { label: "Saturation"; key: "rainbow_sat"; value: S.p.rainbow-sat; lo: 0.2; hi: 1; step: 0.01; unit: 1; }
+}
+
+// a hotkey: click, then press the new keys (Esc = keep the old one, Backspace / Delete = no hotkey)
+component HkRow inherits Row {
+    in property <int> n;
+    property <bool> listening: S.hk-capture == root.n;
+    property <bool> kde: S.hk-kde-state == "kde" && root.n < 8;
+    property <string> shown: root.kde ? (S.hk-kde[root.n] == "" ? "No key in KDE" : S.hk-kde[root.n]) : S.hk-names[root.n];
+    property <bool> set: !root.kde && S.hk-names[root.n] != "Not set";
+    // a click starts listening, another click (or clicking elsewhere) keeps the old key; Esc / Backspace remove it
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: max(150px, ht.preferred-width + 28px);
+        height: 32px;
+        border-radius: T.r-small;
+        background: root.listening ? T.accent.with-alpha(0.15) : hta.has-hover ? T.panel2 : T.bg;
+        border-width: 1px;
+        border-color: root.listening ? T.accent : !S.hk-ok[root.n] ? T.warn : T.line;
+        animate background, border-color { duration: T.fade; enabled: !T.rgb-live; }
+        ht := Text {
+            text: root.listening ? "Press the keys…  (Esc removes it)" : root.shown;
+            font-size: 13px;
+            color: root.listening ? T.text : (root.kde ? S.hk-kde[root.n] == "" : S.hk-names[root.n] == "Not set") ? T.dim : T.text;
+        }
+        hta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                if (root.listening) {
+                    S.hk-cancel();
+                } else {
+                    S.hk-start(root.n);
+                    fs.focus();
+                }
+            }
+        }
+        fs := FocusScope {
+            enabled: root.listening;
+            key-pressed(e) => {
+                if (!root.listening) {
+                    return reject;
+                }
+                if (e.text == Key.Escape) {
+                    S.hk-clear(root.n);
+                    return accept;
+                }
+                S.hk-key(root.n, e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+                accept
+            }
+            focus-changed-event => {
+                if (!self.has-focus && root.listening) {
+                    S.hk-cancel();
+                }
+            }
+        }
+    }
+    // × = remove the key without capturing
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        opacity: root.set && !root.listening ? 1 : 0;
+        background: xta.has-hover && root.set ? T.bad.with-alpha(0.18) : transparent;
+        animate background { duration: T.fade; enabled: !T.rgb-live; }
+        Icon { width: 12px; height: 12px; stroke-width: 2.2px; commands: "M6 6l12 12 M18 6L6 18"; stroke: xta.has-hover ? T.bad : T.dim; }
+        xta := TouchArea {
+            enabled: root.set && !root.listening;
+            mouse-cursor: pointer;
+            clicked => { S.hk-clear(root.n); }
+        }
+    }
+}
+
+component PageTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> sub;
+    spacing: 4px;
+    padding-bottom: 10px;
+    Text { text: root.title; font-size: 24px; font-weight: 700 + T.fw; color: T.text; }
+    Text { text: root.sub; font-size: 13px; color: T.muted; }
+}
+
+// "More presets": sections of tiles, a search on top; Back or Esc closes; a click applies (the preview follows)
+component GalleryPage inherits FocusScope {
+    init => {
+        self.focus();
+    }
+    key-pressed(e) => {
+        if (e.text == Key.Escape) {
+            S.gallery = false;
+            return accept;
+        }
+        if (e.modifiers.control && (e.text == "f" || e.text == "F")) {
+            gq.focus();
+            return accept;
+        }
+        reject
+    }
+    VerticalLayout {
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            Btn { y: 4px; text: "Back"; icon: "M15 5l-7 7 7 7"; small: true; clicked => { S.gallery = false; } }
+            PageTitle { title: "More presets"; sub: S.gal-count + " crosshairs, each in its own colour - change the colour afterwards as usual"; }
+        }
+        Rectangle {
+            height: 36px;
+            border-radius: T.r-small;
+            border-width: 1px;
+            border-color: gq.has-focus ? T.accent : T.line;
+            background: T.panel2;
+            animate border-color { duration: T.fade; enabled: !T.rgb-live; }
+            Icon { x: 11px; width: 14px; height: 14px; commands: Ic.search; stroke: T.dim; }
+            if gq.text == "": Text {
+                x: 33px;
+                text: "Search presets…  (dot, thin, ring, sniper, cyan…)";
+                font-size: 13px;
+                color: T.muted.with-alpha(0.75);
+                vertical-alignment: center;
+            }
+            gq := TextInput {
+                x: 33px;
+                width: parent.width - 44px;
+                text <=> S.gal-q;
+                font-size: 13px;
+                color: T.text;
+                vertical-alignment: center;
+                single-line: true;
+                edited => { S.gal-search(self.text); }
+                key-pressed(e) => {
+                    if (e.text == Key.Escape) {
+                        if (self.text != "") {
+                            self.text = "";
+                            S.gal-search("");
+                        } else {
+                            S.gallery = false;
+                        }
+                        return accept;
+                    }
+                    reject
+                }
+            }
+        }
+        for sec in S.gal: VerticalLayout {
+            spacing: 8px;
+            padding-top: 4px;
+            Text { text: sec.title; font-size: 11px; font-weight: 700 + T.fw; letter-spacing: 0.9px; color: T.dim; }
+            FlexboxLayout {
+                flex-wrap: wrap;
+                spacing-horizontal: 8px;
+                spacing-vertical: 8px;
+                for it in sec.items: gt := LiftTile {
+                    width: 92px;
+                    height: 80px;
+                    on: it.on;
+                    clicked => { S.gal-pick(it.idx); }
+                    Image {
+                        y: 6px;
+                        height: 50px;
+                        source: it.img;
+                        image-fit: contain;
+                        image-rendering: pixelated;
+                    }
+                    Text {
+                        x: 4px;
+                        y: parent.height - 20px;
+                        width: parent.width - 8px;
+                        horizontal-alignment: center;
+                        text: it.name;
+                        font-size: 11px;
+                        overflow: elide;
+                        color: gt.on || gt.hov ? T.text : T.muted;
+                    }
+                }
+            }
+        }
+        if S.gal.length == 0: Note { text: "No preset matches that. Try \"dot\", \"ring\", \"thin\" or a colour."; }
+    }
+}
+
+component DesignerPage inherits VerticalLayout {
+    spacing: 14px;
+    PageTitle { title: "Designer"; sub: "Build a crosshair from scratch"; }
+    if S.p.is-image: Card {
+        Note { text: "An image is used as the crosshair right now. Change anything below to use the design instead."; }
+    }
+    Card {
+        title: "Start from a preset";
+        VerticalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            for row in [0, 1, 2, 3]: HorizontalLayout {
+                spacing: 8px;
+                // 19 presets, then "More presets" (the gallery) as the 20th tile
+                for i in [0, 1, 2, 3, 4]: pt := LiftTile {
+                    property <int> n: row * 5 + i;
+                    property <bool> more: n == 19;
+                    height: 74px;
+                    on: !self.more && n < S.presets.length && S.presets[n].on;
+                    clicked => {
+                        if (self.more) {
+                            S.gallery = true;
+                            S.gal-search("");
+                        } else {
+                            S.preset(n);
+                        }
+                    }
+                    if pt.more: Rectangle {
+                        y: 14px;
+                        width: 26px;
+                        height: 26px;
+                        for k in 4: Rectangle {
+                            x: mod(k, 2) * 15px;
+                            y: floor(k / 2) * 15px;
+                            width: 11px;
+                            height: 11px;
+                            border-radius: 3px;
+                            border-width: 1.5px;
+                            border-color: pt.hov ? T.accent2 : T.muted;
+                            background: k == 3 ? (pt.hov ? T.accent.with-alpha(0.35) : T.hover) : transparent;
+                            animate border-color, background { duration: T.fade; enabled: !T.rgb-live; }
+                        }
+                    }
+                    if pt.more: Text {
+                        x: parent.width - self.width - 7px;
+                        y: 5px;
+                        text: (floor(S.gal-count / 10) * 10) + "+";
+                        font-size: 10px;
+                        color: T.dim;
+                    }
+                    if pt.more: Text {
+                        y: parent.height - 20px;
+                        width: parent.width;
+                        horizontal-alignment: center;
+                        text: "More presets";
+                        font-size: 11px;
+                        color: pt.hov ? T.text : T.muted;
+                    }
+                    if !pt.more && n < S.presets.length: Image {
+                        y: 6px;
+                        height: 46px;
+                        source: S.presets[n].img;
+                        image-fit: contain;
+                        image-rendering: pixelated;
+                    }
+                    if !pt.more && n < S.presets.length: Text {
+                        y: parent.height - 20px;
+                        width: parent.width;
+                        horizontal-alignment: center;
+                        text: S.presets[n].name;
+                        font-size: 11px;
+                        color: pt.on || pt.hov ? T.text : T.muted;
+                    }
+                }
+            }
+        }
+    }
+    Card {
+        title: "Color";
+        ColorRow { label: "Crosshair color"; key: "color"; value: S.p.color; rgb-key: "rainbow"; rgb: S.p.rainbow; }
+        SRow { label: "Opacity"; key: "opacity"; value: S.p.opacity; lo: 0.05; hi: 1; step: 0.01; unit: 1; }
+        Rainbow { }
+    }
+    Card {
+        title: "Inner lines";
+        has-switch: true;
+        on: S.p.inner;
+        toggled(v) => { S.flag("inner", v); }
+        if S.p.inner: VerticalLayout {
+            SRow { label: "Length"; key: "inner_len"; value: S.p.inner-len; lo: 1; hi: 60; }
+            SRow { label: "Thickness"; key: "inner_thick"; value: S.p.inner-thick; lo: 1; hi: 20; }
+            SRow { label: "Gap"; key: "inner_gap"; value: S.p.inner-gap; lo: 0; hi: 60; }
+            SRow { label: "Opacity"; key: "inner_opacity"; value: S.p.inner-opacity; lo: 0; hi: 1; step: 0.01; unit: 1; }
+        }
+    }
+    Card {
+        title: "Center dot";
+        has-switch: true;
+        on: S.p.dot;
+        toggled(v) => { S.flag("dot", v); }
+        if S.p.dot: VerticalLayout {
+            SRow { label: "Size"; key: "dot_size"; value: S.p.dot-size; lo: 1; hi: 40; }
+            SwRow { label: "Round dot"; key: "dot_round"; on: S.p.dot-round; }
+            SRow { label: "Opacity"; key: "dot_opacity"; value: S.p.dot-opacity; lo: 0; hi: 1; step: 0.01; unit: 1; }
+        }
+    }
+    Card {
+        title: "Outer lines";
+        has-switch: true;
+        on: S.p.outer;
+        toggled(v) => { S.flag("outer", v); }
+        if S.p.outer: VerticalLayout {
+            SRow { label: "Length"; key: "outer_len"; value: S.p.outer-len; lo: 1; hi: 60; }
+            SRow { label: "Thickness"; key: "outer_thick"; value: S.p.outer-thick; lo: 1; hi: 20; }
+            SRow { label: "Gap"; key: "outer_gap"; value: S.p.outer-gap; lo: 0; hi: 100; }
+            SRow { label: "Opacity"; key: "outer_opacity"; value: S.p.outer-opacity; lo: 0; hi: 1; step: 0.01; unit: 1; }
+        }
+    }
+    Card {
+        title: "Circle";
+        has-switch: true;
+        on: S.p.circle;
+        toggled(v) => { S.flag("circle", v); }
+        if S.p.circle: VerticalLayout {
+            SRow { label: "Radius"; key: "circle_radius"; value: S.p.circle-radius; lo: 2; hi: 100; }
+            SRow { label: "Thickness"; key: "circle_thick"; value: S.p.circle-thick; lo: 1; hi: 20; }
+            SRow { label: "Opacity"; key: "circle_opacity"; value: S.p.circle-opacity; lo: 0; hi: 1; step: 0.01; unit: 1; }
+        }
+    }
+    Card {
+        title: "Outline";
+        has-switch: true;
+        on: S.p.outline;
+        toggled(v) => { S.flag("outline", v); }
+        if S.p.outline: VerticalLayout {
+            SRow { label: "Thickness"; key: "outline_thick"; value: S.p.outline-thick; lo: 1; hi: 6; }
+            ColorRow { label: "Outline color"; key: "outline_color"; value: S.p.outline-color; }
+            SRow { label: "Opacity"; key: "outline_opacity"; value: S.p.outline-opacity; lo: 0; hi: 1; step: 0.01; unit: 1; }
+            if S.is-windows: SwRow { label: "Smart outline"; sub: "The outline turns black on bright backgrounds and white on dark ones. Windows only."; key: "app.smart_outline"; on: S.smart-outline; }
+        }
+    }
+    Card {
+        title: "Transform";
+        SRow { label: "Scale"; key: "scale"; value: S.p.scale; lo: 0.5; hi: 4; step: 0.05; unit: 2; }
+        SRow { label: "Rotation"; key: "rotation"; value: S.p.rotation; lo: 0; hi: 359; unit: 3; }
+        SwRow { label: "T-style (no top line)"; key: "t_style"; on: S.p.t-style; }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            alignment: start;
+            Btn { text: "Randomize"; icon: Ic.dice; small: true; clicked => { S.randomize(); } }
+            Btn { text: "Reset design"; icon: Ic.reset; small: true; clicked => { S.reset-design(); } }
+        }
+    }
+}
+
+component OverlaySec inherits VerticalLayout {
+    spacing: 14px;
+    if (Find.q == "" || Find.matches(Find.q, "placement show hide crosshair monitor screen move left right up down offset position centre center follow game size pixels percent resolution 1080p 1440p 4k scale")): Card {
+        title: "Placement";
+        SwRow { label: "Show the crosshair"; key: "app.overlay_on"; on: S.overlay-on; }
+        if S.monitors.length > 1: Row {
+            label: "Monitor";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: S.monitors;
+                value: S.monitor;
+                picked(v) => { S.num("app.monitor", v); }
+            }
+        }
+        if S.monitors.length > 1: SwRow {
+            label: "Follow the game's screen";
+            sub: "Windows: the screen of the focused window. KDE: the active screen, picked up each time the crosshair shows. X11: not yet.";
+            key: "app.monitor_follow";
+            on: S.monitor-follow;
+        }
+        Row {
+            label: "Size";
+            sub: S.size-mode == 1 ? "Designed at 1080p and scaled to your monitor: 1440p = 1.33×, 4K = 2×." : "The crosshair is as many pixels as you set, on every monitor.";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Fixed pixels", value: 0 }, { label: "% of the screen height", value: 1 }];
+                value: S.size-mode;
+                picked(v) => { S.num("app.size_mode", v); }
+            }
+        }
+        SRow { label: "Move left / right"; key: "app.offset_x"; value: S.offset-x; lo: -500; hi: 500; }
+        SRow { label: "Move up / down"; key: "app.offset_y"; value: S.offset-y; lo: -500; hi: 500; }
+        HorizontalLayout {
+            padding-top: 4px;
+            spacing: 10px;
+            Btn { text: "Back to the centre"; small: true; clicked => { S.num("app.offset_x", 0); S.num("app.offset_y", 0); } }
+            Note { text: "Tip: click a slider, then use the arrow keys or the mouse wheel for 1 px steps."; vertical-alignment: center; }
+        }
+    }
+    if S.is-windows && (Find.q == "" || Find.matches(Find.q, "display mode game bar fullscreen exclusive directx widget")): Card {
+        title: "Display mode";
+        Row {
+            label: "Show the crosshair with";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Normal overlay", value: 0 }, { label: "Game Bar mode", value: 1 }];
+                value: S.display-mode;
+                picked(v) => { S.num("app.display_mode", v); }
+            }
+        }
+        Note {
+            text: S.display-mode == 0
+                ? "Normal overlay: for games in borderless or windowed mode. Exclusive fullscreen hides it - use Game Bar mode there."
+                : "Game Bar mode: for exclusive fullscreen DirectX games. The crosshair is drawn by the Aimdot widget in Xbox Game Bar instead of the normal overlay.";
+        }
+        if S.display-mode == 1: VerticalLayout {
+            padding-top: 8px;
+            spacing: 6px;
+            Text { text: "Set it up once:"; font-size: 13.5px; font-weight: 600 + T.fw; color: T.text; }
+            for step[i] in [
+                "Install the Aimdot Game Bar widget." + (S.gamebar == "installed" ? "  (Widget installed.)" : S.gamebar == "missing" ? "  (Widget not installed yet.)" : ""),
+                "Start your game, then press Win + G to open Game Bar.",
+                "Open the Widget menu and pick \"Aimdot\".",
+                "Click the pin icon on the widget, so it stays when Game Bar closes.",
+                "Turn on click-through: the mouse icon in Game Bar's top bar (it counts for all pinned widgets). Then your clicks go to the game.",
+                "Press Win + G again to close Game Bar. The crosshair stays.",
+            ]: HorizontalLayout {
+                spacing: 10px;
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: T.panel2;
+                    Text { text: i + 1; font-size: 12px; color: T.muted; }
+                }
+                Note { text: step; color: T.text; vertical-alignment: center; }
+            }
+            Note { text: "Good to know: works with DirectX games - for Vulkan or OpenGL games use borderless or windowed mode (and Normal overlay). The aiming options don't work in Game Bar mode. Some games block Game Bar. Crosshair not in the middle? Close the widget and open it again in Game Bar (it centres itself), or use the offset. Crosshair gone with HDR on? Try HDR off."; }
+        }
+    }
+    if (Find.q == "" || Find.matches(Find.q, "behaviour behavior when to show aiming aim right mouse button hide while aiming efficiency mode power priority instant fade menus cursor")): Card {
+        title: "Behaviour";
+        Row {
+            label: "When to show it";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Always", value: 0 }, { label: "Only while aiming", value: 1 }, { label: "Hide while aiming", value: 2 }];
+                value: S.aim-mode;
+                picked(v) => { S.num("app.aim_mode", v); }
+            }
+        }
+        Note {
+            text: (S.aim-mode == 1 ? "Shows only while you hold the right mouse button." : S.aim-mode == 2 ? "Hides while you hold the right mouse button." : "Always on screen while the crosshair is switched on.")
+                + (S.hk-kde-state == "kde" ? (S.hk-kde[0] != "" ? " The show / hide hotkey (" + S.hk-kde[0] + ") works in every mode." : "")
+                    : S.hk-names[0] != "Not set" ? " The show / hide hotkey (" + S.hk-names[0] + ") works in every mode." : "")
+                + (S.is-windows && S.display-mode == 1 && S.aim-mode != 0 ? " Not in Game Bar mode: the widget doesn't get the mouse buttons." : "");
+        }
+        if !S.is-windows && S.aim-mode != 0: Note {
+            text: S.aim-status == "ok" ? "Working: reads the right mouse button straight from the mouse (read only - the game still gets every click)."
+                : S.aim-status == "no-permission" ? "Not working: on Linux this needs read access to the mouse (your user in the \"input\" group: sudo usermod -aG input $USER, then log out and in). Optional - nothing else needs it. Until then the crosshair is always shown."
+                : S.aim-status == "none" ? "Not working: no mouse found. Until then the crosshair is always shown." : "";
+            color: S.aim-status == "ok" ? T.ok : T.warn;
+        }
+        Row {
+            label: "Show / hide";
+            sub: !S.show-fade ? "Instant appears and disappears in the same frame."
+                : S.is-windows ? "Fade: the crosshair fades in and out (about 0.1 s)."
+                : "Fade: your desktop fades the crosshair in and out (KDE does this; other desktops may not).";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Instant", value: 0 }, { label: "Fade", value: 1 }];
+                value: S.show-fade ? 1 : 0;
+                picked(v) => { S.flag("app.show_fade", v == 1); }
+            }
+        }
+        if S.is-windows: SwRow {
+            label: "Hide in menus";
+            sub: "Hides the crosshair while the mouse cursor shows (game menus, desktop).";
+            key: "app.hide_cursor";
+            on: S.hide-cursor;
+        }
+        if S.is-windows: SwRow {
+            label: "Efficiency mode";
+            sub: "Runs the overlay at low priority with Windows' power saving (leaf icon in Task Manager).";
+            key: "app.eco";
+            on: S.eco;
+        }
+    }
+    // fair play: one plain line (10 Nov 2026)
+    if (Find.q == "" || Find.matches(Find.q, "fair play ranked anti-cheat anticheat allowed rules")): Rectangle {
+        min-height: 48px; // a wrapping text doesn't give the box its height in the layout
+        background: T.panel;
+        border-radius: T.r-card;
+        border-width: 1px;
+        border-color: T.line;
+        HorizontalLayout {
+            padding: 14px;
+            padding-left: 16px;
+            spacing: 12px;
+            Icon { y: (parent.height - self.height) / 2; commands: Ic.shield; stroke: T.warn; width: 18px; height: 18px; }
+            Text { text: S.anticheat; font-size: 13px; color: T.text; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+        }
+    }
+}
+component HotkeysSec inherits VerticalLayout {
+    spacing: 14px;
+    if (Find.q == "" || Find.matches(Find.q, "hotkeys hotkey keys keyboard shortcut shortcuts show hide next previous saved crosshair open settings nudge move 1 px zoom hold wheel ring colour color")): Card {
+        title: "Hotkeys";
+        HkRow { label: "Show / hide the crosshair"; n: 0; }
+        HkRow { label: "Next saved crosshair"; n: 1; }
+        HkRow { label: "Previous saved crosshair"; n: 2; }
+        HkRow { label: "Open these settings"; n: 3; }
+        HkRow { label: "Move 1 px up"; n: 4; }
+        HkRow { label: "Move 1 px down"; n: 5; }
+        HkRow { label: "Move 1 px left"; n: 6; }
+        HkRow { label: "Move 1 px right"; n: 7; }
+        if S.is-windows: HkRow { label: "Hold to zoom"; sub: "Zooms in around the centre while you hold the key."; n: 8; }
+        if S.is-windows: Row {
+            label: "Zoom";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "2×", value: 2 }, { label: "3×", value: 3 }, { label: "4×", value: 4 }];
+                value: S.zoom-level;
+                picked(v) => { S.num("app.zoom_level", v); }
+            }
+        }
+        if S.is-windows: SwRow { label: "Mouse wheel changes the zoom"; sub: "While the zoom key is held."; key: "app.zoom_scroll"; on: S.zoom-scroll; }
+        if S.is-windows: ColorRow { label: "Zoom ring colour"; key: "app.zoom_ring"; value: S.zoom-ring; }
+        if S.is-windows: Note { text: "Some games treat zoom as cheating - only use it where it's allowed."; }
+        Note {
+            text: S.hk-kde-state == "unavailable" ? "Hotkeys need a desktop with the shortcuts portal (KDE Plasma, GNOME 48+, Hyprland)."
+                : S.hk-kde-state == "kde" ? "KDE owns these keys: KDE asks once, then change them in System Settings > Shortcuts > Aimdot. Changing a key here only suggests it to KDE."
+                    + (S.hk-kde[0] == "" || S.hk-kde[1] == "" || S.hk-kde[2] == "" || S.hk-kde[3] == "" || S.hk-kde[4] == "" || S.hk-kde[5] == "" || S.hk-kde[6] == "" || S.hk-kde[7] == "" ? " No key in KDE - set one in System Settings > Shortcuts > Aimdot." : "")
+                : !S.hk-ok[0] || !S.hk-ok[1] || !S.hk-ok[2] || !S.hk-ok[3] || !S.hk-ok[4] || !S.hk-ok[5] || !S.hk-ok[6] || !S.hk-ok[7] || !S.hk-ok[8] ? "A hotkey with an orange edge is already used by another app - pick a different one."
+                : "Click a hotkey, then press the new keys. Esc removes it.";
+            color: S.hk-kde-state == "unavailable" || (S.hk-kde-state == "" && (!S.hk-ok[0] || !S.hk-ok[1] || !S.hk-ok[2] || !S.hk-ok[3] || !S.hk-ok[4] || !S.hk-ok[5] || !S.hk-ok[6] || !S.hk-ok[7] || !S.hk-ok[8])) ? T.warn : T.muted;
+        }
+    }
+}
+component AppearanceSec inherits VerticalLayout {
+    spacing: 14px;
+    if (Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window")): Card {
+        title: "Theme";
+        VerticalLayout {
+            padding-top: 6px;
+            spacing: 12px;
+            for line in S.themes: HorizontalLayout {
+                spacing: 12px;
+                for c in line.items: ThemeTile {
+                    c: c;
+                    picked(id) => { S.set-theme(id); }
+                }
+                // fill a short last line so the cards keep their width
+                for i in (4 - line.items.length): Rectangle {
+                    horizontal-stretch: 1;
+                    max-width: 200px;
+                }
+            }
+        }
+        Note {
+            text: S.ui-theme == "system" ? "Match system: Light when your desktop uses a light theme, else Coral. Seasonal themes are near the end." : "Coral is Aimdot's own look. Seasonal themes are near the end; Custom lets you pick your own colours.";
+        }
+    }
+    if S.ui-theme == "custom" && (Find.q == "" || Find.matches(Find.q, "custom colours colors accent background rgb rainbow")): Card {
+        title: "Custom colours";
+        ColorRow {
+            label: "Accent";
+            key: "app.ui_accent";
+            rgb-key: "app.ui_accent_rgb";
+            rgb: S.ui-accent-rgb;
+            value: T.accent;
+            swatches: [#ef6a4c, #7c5cff, #2fa8e0, #2fbf86, #e03232, #e0609e, #e0a93a, #8fcf3c, #8a96a8, #6a6ff0];
+        }
+        ColorRow {
+            label: "Background";
+            key: "app.ui_bg";
+            rgb-key: "app.ui_bg_rgb";
+            rgb: S.ui-bg-rgb;
+            value: T.bg;
+            swatches: [#0d0d10, #0b0e12, #100d0b, #0b100e, #100c0f, #08080f, #0d1015, #1a1a1f, #f4f4f7, #f6f2ea];
+        }
+        Note { text: "Dark backgrounds are kept dark enough to read; a light one gives a light window. Double-click the round preview in the picker for RGB (the colour cycles through the rainbow)."; }
+        HorizontalLayout {
+            padding-top: 8px;
+            alignment: start;
+            Btn { text: "Back to Coral"; icon: Ic.reset; small: true; clicked => { S.theme-reset(); } }
+        }
+    }
+}
+component StartSec inherits VerticalLayout {
+    spacing: 14px;
+    if (Find.q == "" || Find.matches(Find.q, "start with my pc computer log in login autostart boot startup background minimised minimized tray")): Card {
+        title: "Start";
+        SwRow {
+            label: "Start with my PC";
+            sub: "Starts Aimdot when you log in. Off until you turn it on.";
+            key: "app.autostart";
+            on: S.autostart;
+        }
+        SwRow {
+            label: "Start minimised";
+            sub: "When Aimdot starts with your PC it stays in the tray (opening Aimdot yourself always shows the window).";
+            key: "app.start_minimized";
+            on: S.start-minimized;
+        }
+        if S.autostart-note != "": Note { text: S.autostart-note; color: T.warn; }
+    }
+}
+component AboutSec inherits VerticalLayout {
+    spacing: 14px;
+    if (Find.q == "" || Find.matches(Find.q, "about overlay running quit start version memory cpu")): Card {
+        title: "Overlay";
+        Row {
+            label: S.conn == "ok" ? "Running" : S.conn == "starting" ? "Starting…" : "Not running";
+            sub: S.conn == "ok" ? "Drawn with: " + S.platform : "The crosshair isn't shown while the overlay is not running.";
+            if S.conn == "offline": Btn { y: (parent.height - self.height) / 2; text: "Start"; primary: true; small: true; clicked => { S.start-overlay(); } }
+            if S.conn == "ok": Btn { y: (parent.height - self.height) / 2; text: "Quit Aimdot"; icon: Ic.power; danger: true; small: true; clicked => { S.quit-overlay(); } }
+        }
+        Note { text: "Closing this window keeps the crosshair on screen. The overlay uses almost no memory or CPU while you play."; }
+    }
+    UpdateCard { }
+    if (Find.q == "" || Find.matches(Find.q, "about log logs problem bug help feedback diagnose copy folder")): Card {
+        title: "Log";
+        Row {
+            label: "aimdot.log";
+            sub: "What Aimdot did (start, mode, Game Bar widget). No names or personal folders. Send it along when something doesn't work.";
+            HorizontalLayout {
+                spacing: 8px;
+                Btn { y: (parent.height - self.height) / 2; text: "Open log folder"; small: true; clicked => { S.open-log-folder(); } }
+                Btn { y: (parent.height - self.height) / 2; text: "Copy log"; small: true; clicked => { S.copy-log(); } }
+            }
+        }
+        if S.log-note != "": Note { text: S.log-note; }
+    }
+    if (Find.q == "" || Find.matches(Find.q, "about credits made by resister0 sonela log logs problem bug help feedback diagnose copy folder")): Card {
+        title: "Credits";
+        Note { text: "Aimdot is made by Resister0, part of Sonela."; }
+    }
+}
+
+// Echo's Settings: one page - a second column with the search box (Ctrl+F) and the sections grouped under small
+// headers, all sections one under the other on the right; a click scrolls there, the highlight follows the scroll.
+// While searching, only the matching cards show (the matching rows highlighted).
+component SettingsPage inherits FocusScope {
+    // the section at the top of the view (or the one just clicked, until the scroll gets there)
+    property <string> active: -sv.content-y + 80px >= about-s.y ? "about" : -sv.content-y + 80px >= start-s.y ? "start" : -sv.content-y + 80px >= appearance-s.y ? "appearance" : -sv.content-y + 80px >= hotkeys-s.y ? "hotkeys" : "overlay";
+    function go(id: string) {
+        S.sec = id;
+        sv.content-y = -min(max(0px, body.preferred-height - sv.visible-height),
+            id == "hotkeys" ? hotkeys-s.y : id == "appearance" ? appearance-s.y : id == "start" ? start-s.y : id == "about" ? about-s.y : 0px);
+    }
+    init => {
+        // old page numbers (other sessions / test hooks): 2 = About, 3 = Appearance; S.sec = the section to show
+        if (S.page == 2) {
+            S.sec = "about";
+        } else if (S.page == 3) {
+            S.sec = "appearance";
+        }
+        S.page = 1;
+        self.focus();
+        start-timer.running = true;
+    }
+    // after the first layout: scroll to S.sec (the top bar's palette button, old page numbers)
+    start-timer := Timer {
+        interval: 30ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.go(S.sec);
+        }
+    }
+    // the top bar's palette button while this page is open
+    property <string> want: S.sec;
+    changed want => { root.go(S.sec); }
+    key-pressed(e) => {
+        // Echo: Ctrl+F = search
+        if (e.modifiers.control && (e.text == "f" || e.text == "F")) {
+            sq.focus();
+            return accept;
+        }
+        reject
+    }
+    HorizontalLayout {
+        Rectangle {
+            width: 196px;
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: T.line;
+            }
+            VerticalLayout {
+                padding-top: 18px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 2px;
+                // search
+                Rectangle {
+                    height: 34px;
+                    border-radius: T.r-small;
+                    border-width: 1px;
+                    border-color: sq.has-focus ? T.accent : T.line;
+                    background: T.panel2;
+                    animate border-color { duration: T.fade; enabled: !T.rgb-live; }
+                    Icon { x: 10px; width: 14px; height: 14px; commands: Ic.search; stroke: T.dim; }
+                    if sq.text == "": Text {
+                        x: 31px;
+                        text: "Search…  (Ctrl+F)";
+                        font-size: 13px;
+                        color: T.muted.with-alpha(0.75);
+                        vertical-alignment: center;
+                    }
+                    sq := TextInput {
+                        x: 31px;
+                        width: parent.width - 40px;
+                        text <=> Find.q;
+                        font-size: 13px;
+                        color: T.text;
+                        vertical-alignment: center;
+                        single-line: true;
+                        edited => { sv.content-y = 0; }
+                        key-pressed(e) => {
+                            // Echo: Esc empties the box and leaves it
+                            if (e.text == Key.Escape) {
+                                self.text = "";
+                                root.focus();
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+                }
+                Rectangle { height: 4px; }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        Text { text: "CROSSHAIR"; font-size: 11px; font-weight: 700 + T.fw; letter-spacing: 0.9px; color: T.dim; height: 26px; vertical-alignment: bottom; }
+                    }
+                    Rectangle { height: 4px; }
+                    NavBtn { label: "Overlay"; icon: Ic.monitor; on: Find.q == "" && root.active == "overlay"; faded: Find.q != ""; clicked => { Find.q = ""; root.go("overlay"); } }
+                    NavBtn { label: "Hotkeys"; icon: Ic.keys; on: Find.q == "" && root.active == "hotkeys"; faded: Find.q != ""; clicked => { Find.q = ""; root.go("hotkeys"); } }
+                    Rectangle { height: 6px; }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        Text { text: "APP"; font-size: 11px; font-weight: 700 + T.fw; letter-spacing: 0.9px; color: T.dim; height: 26px; vertical-alignment: bottom; }
+                    }
+                    Rectangle { height: 4px; }
+                    NavBtn { label: "Appearance"; icon: Ic.palette; on: Find.q == "" && root.active == "appearance"; faded: Find.q != ""; clicked => { Find.q = ""; root.go("appearance"); } }
+                    NavBtn { label: "Start"; icon: Ic.power; on: Find.q == "" && root.active == "start"; faded: Find.q != ""; clicked => { Find.q = ""; root.go("start"); } }
+                    NavBtn { label: "About"; icon: Ic.info; on: Find.q == "" && root.active == "about"; faded: Find.q != ""; clicked => { Find.q = ""; root.go("about"); } }
+                    Rectangle { height: 6px; }
+                Rectangle { }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            TopGlow { }
+            sv := ScrollView {
+                body := VerticalLayout {
+                    alignment: start;
+                    padding: 26px;
+                    padding-right: 22px;
+                    spacing: 10px;
+                    if Find.q != "": PageTitle { title: "Search"; sub: "Settings that match \"" + Find.q + "\""; }
+                    overlay-s := VerticalLayout {
+                        spacing: 14px;
+                        if Find.q == "" || Find.matches(Find.q, "placement show hide crosshair monitor screen move left right up down offset position centre center follow game size pixels percent resolution 1080p 1440p 4k scale display mode game bar fullscreen exclusive directx widget behaviour behavior when to show aiming aim right mouse button hide while aiming efficiency mode power priority instant fade menus cursor fair play ranked anti-cheat anticheat allowed rules"): VerticalLayout {
+                            spacing: 14px;
+                            padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
+                            PageTitle { title: "Overlay"; sub: "Where and when the crosshair shows."; }
+                            OverlaySec { }
+                        }
+                    }
+                    hotkeys-s := VerticalLayout {
+                        spacing: 14px;
+                        if Find.q == "" || Find.matches(Find.q, "hotkeys hotkey keys keyboard shortcut shortcuts show hide next previous saved crosshair open settings nudge move 1 px zoom hold wheel ring colour color"): VerticalLayout {
+                            spacing: 14px;
+                            padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
+                            PageTitle { title: "Hotkeys"; sub: "Keys that work while you play."; }
+                            HotkeysSec { }
+                        }
+                    }
+                    appearance-s := VerticalLayout {
+                        spacing: 14px;
+                        if Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window custom colours colors accent background"): VerticalLayout {
+                            spacing: 14px;
+                            padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
+                            PageTitle { title: "Appearance"; sub: "Pick a look for this window - the crosshair keeps its own colours."; }
+                            AppearanceSec { }
+                        }
+                    }
+                    start-s := VerticalLayout {
+                        spacing: 14px;
+                        if Find.q == "" || Find.matches(Find.q, "start with my pc computer log in login autostart boot startup background minimised minimized tray"): VerticalLayout {
+                            spacing: 14px;
+                            padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
+                            PageTitle { title: "Start"; sub: "What happens when you log in."; }
+                            StartSec { }
+                        }
+                    }
+                    about-s := VerticalLayout {
+                        spacing: 14px;
+                        if Find.q == "" || Find.matches(Find.q, "about overlay running quit start version memory cpu about credits made by resister0 sonela log logs problem bug help feedback diagnose copy folder log logs problem bug help feedback diagnose copy folder"): VerticalLayout {
+                            spacing: 14px;
+                            padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
+                            PageTitle { title: "About"; sub: "Aimdot " + S.version + ""; }
+                            AboutSec { }
+                        }
+                    }
+                    if Find.q != "" && !Find.matches(Find.q, "placement show hide crosshair monitor screen move left right up down offset position centre center follow game size pixels percent resolution 1080p 1440p 4k scale display mode game bar fullscreen exclusive directx widget behaviour behavior when to show aiming aim right mouse button hide while aiming efficiency mode power priority instant fade menus cursor fair play ranked anti-cheat anticheat allowed rules hotkeys hotkey keys keyboard shortcut shortcuts show hide next previous saved crosshair open settings nudge move 1 px zoom hold wheel appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window custom colours colors accent background start with my pc computer log in login autostart boot startup background minimised minimized tray about overlay running quit start version memory cpu about credits made by resister0 sonela log logs problem bug help feedback diagnose copy folder"): Note { text: "Nothing found. Try another word, like \"hotkey\", \"theme\" or \"monitor\"."; }
+                    // room so the last section can scroll to the top
+                    Rectangle { height: max(0px, sv.visible-height - about-s.preferred-height - 40px); }
+                }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Aimdot";
+    // the app icon (assets/icons, picked 10 Nov 2026): title bar / Alt+Tab on X11 + Windows; Wayland takes it
+    // from link.sonela.Aimdot.desktop (scripts/install-dev-linux.sh)
+    icon: @image-url("../../assets/icons/aimdot-256.png");
+    // Echo's own title bar: no system frame (CROSSHAIR_NATIVE_FRAME=1 = the normal frame, src/titlebar.rs)
+    in property <bool> custom-frame: true;
+    in property <bool> drag-on-move;
+    in property <bool> win-max;
+    callback win-act(string);   // "min" / "max" / "close" / "drag" / "size" / "resize:n|s|e|w|ne|nw|se|sw"
+    no-frame: root.custom-frame;
+    // a tool you tweak: smaller than Echo's 1500 x 900, but Designer + Preview fit at 1080p
+    preferred-width: 1120px;
+    preferred-height: 860px;
+    min-width: 860px;
+    min-height: 520px;
+    background: T.bg;
+    default-font-size: 14px;
+    changed width => { root.win-act("size"); }
+    // leaving the Designer (any way: the rail, the top bar, "Edit in the painter") closes "More presets"
+    property <int> pg: S.page;
+    changed pg => {
+        if (self.pg != 0) {
+            S.gallery = false;
+        }
+    }
+    VerticalLayout {
+        TopBar {
+            custom-frame: root.custom-frame;
+            drag-on-move: root.drag-on-move;
+            win-max: root.win-max;
+            offline: S.conn == "offline";
+            status: S.conn == "starting" ? "Starting…" : S.conn != "ok" ? "Overlay not running"
+                : !S.overlay-on ? "Crosshair hidden"
+                : (S.is-windows && S.display-mode == 1 ? "Game Bar · " : "")
+                    + (S.aim-mode == 1 ? "Shows while aiming" : S.aim-mode == 2 ? "Hides while aiming" : "Always shown");
+            // Aimdot's coral while the crosshair is on screen (always coral, whatever the theme), grey otherwise
+            status-dot: S.conn == "ok" && S.overlay-on ? #ef6a4c : T.muted;
+            on: S.overlay-on;
+            hk-keys: S.hk-keys;
+            hk-listening: S.hk-capture == 0;
+            hk-bad: S.hk-kde-state == "" && !S.hk-ok[0];
+            hk-none: S.hk-kde-state == "kde" ? "No key in KDE" : "Set a show / hide key";
+            hk-unset: S.hk-kde-state != "kde" && S.hk-names[0] == "Not set";
+            look-on: (S.page == 1 && S.sec == "appearance" && Find.q == "") || S.page == 3;
+            win-act(w) => { root.win-act(w); }
+            toggled(v) => { S.flag("app.overlay_on", v); }
+            start => { S.start-overlay(); }
+            // the same setting as Settings > Overlay > When to show it
+            cycle => {
+                S.num("app.aim_mode", mod(S.aim-mode + 1, 3));
+                Toast.text = S.aim-mode == 1 ? "Shows while aiming" : S.aim-mode == 2 ? "Hides while aiming" : "Always shown";
+                Toast.seq += 1;
+            }
+            hk-start => { S.hk-start(0); }
+            hk-key(t, c, a, s, m) => { S.hk-key(0, t, c, a, s, m); }
+            hk-cancel => { S.hk-cancel(); }
+            hk-clear => { S.hk-clear(0); }
+            set-key => {
+                Find.q = "";
+                S.sec = "hotkeys";
+                S.page = 1;
+            }
+            open-look => {
+                Find.q = "";
+                S.sec = "appearance";
+                S.page = 1;
+            }
+        }
+        // a newer version is known: a slim banner (0 px otherwise)
+        UpdateBanner { }
+        HorizontalLayout {
+            // left rail
+            Rectangle {
+                width: 200px;
+                background: T.rail;
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: T.line;
+                }
+                VerticalLayout {
+                    padding: 14px;
+                    padding-top: 18px;
+                    spacing: 4px;
+                    NavBtn { label: "Designer"; icon: Ic.cross; on: S.page == 0; clicked => { Find.q = ""; S.gallery = false; S.page = 0; } }
+                    NavBtn { label: "Images"; icon: PIc.image; on: S.page == 4; clicked => { Find.q = ""; S.gallery = false; S.page = 4; } }
+                    NavBtn { label: "Painter"; icon: PIc.brush; on: S.page == 5; clicked => { Find.q = ""; S.gallery = false; S.page = 5; } }
+                    NavBtn { label: "Profiles"; icon: PrIc.layers; on: S.page == 6; clicked => { Find.q = ""; S.gallery = false; S.page = 6; } }
+                    NavBtn { label: "Settings"; icon: Ic.gear; on: S.page >= 1 && S.page <= 3; clicked => { S.gallery = false; S.page = 1; } }
+                    Rectangle { }
+                    Text {
+                        x: 12px;
+                        text: "Aimdot " + S.version + " · Sonela";
+                        font-size: 11.5px;
+                        color: T.dim;
+                    }
+                }
+            }
+            // Settings: its own section list + body (Echo's Settings), no preview column
+            if S.page >= 1 && S.page <= 3: SettingsPage { horizontal-stretch: 1; }
+            // the other pages
+            if S.page < 1 || S.page > 3: Rectangle {
+                horizontal-stretch: 1;
+                TopGlow { }
+                ScrollView {
+                    VerticalLayout {
+                        alignment: start;
+                        padding: 26px;
+                        padding-right: 22px;
+                        if S.page == 0 && !S.gallery: DesignerPage { }
+                        if S.page == 0 && S.gallery: GalleryPage { }
+                        if S.page == 4: ImagesPage { }
+                        if S.page == 5: PainterPage { }
+                        if S.page == 6: ProfilesPage { }
+                    }
+                }
+            }
+            // preview: the test range (src/range.rs) - not on the Settings page
+            if S.page < 1 || S.page > 3: Rectangle {
+                width: 300px;
+                background: T.rail;
+                Rectangle {
+                    width: 1px;
+                    x: 0;
+                    background: T.line;
+                }
+                ScrollView {
+                    VerticalLayout {
+                        alignment: start;
+                        padding: 18px;
+                        spacing: 12px;
+                        Text { text: "Preview"; font-size: 15px; font-weight: 700 + T.fw; color: T.text; }
+                        Rectangle {
+                            width: 264px;
+                            height: 264px;
+                            border-radius: T.r-card;
+                            clip: true;
+                            background: #1a1c22;
+                            Image {
+                                width: 264px;
+                                height: 264px;
+                                source: S.preview;
+                                image-rendering: pixelated;
+                            }
+                        }
+                        // backgrounds: small tiles, 5 per line - built-in ones, your own pictures, "Add your own…"
+                        for line in S.bg-rows: HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            for i in 5: Rectangle {
+                                property <int> n: line * 5 + i;
+                                width: 48px;
+                                height: 46px;
+                                if n < S.backdrops.length: bt := LiftTile {
+                                    property <Backdrop> b: S.backdrops[n];
+                                    width: parent.width;
+                                    height: parent.height;
+                                    radius: T.r-small;
+                                    on: self.b.file != "" ? S.preview-img == self.b.file : (S.preview-img == "" && S.preview-bg == self.b.value);
+                                    fill: T.panel;
+                                    fill-hover: T.panel2;
+                                    clicked => {
+                                        if (self.b.file != "") {
+                                            S.bg-pick(self.b.file);
+                                        } else {
+                                            S.num("app.preview_bg", self.b.value);
+                                        }
+                                    }
+                                    Rectangle {
+                                        x: 4px;
+                                        y: 4px;
+                                        width: parent.width - 8px;
+                                        height: 24px;
+                                        border-radius: 3px;
+                                        clip: true;
+                                        Image { width: parent.width; height: parent.height; source: bt.b.img; image-fit: cover; }
+                                    }
+                                    Text {
+                                        x: 2px;
+                                        y: 30px;
+                                        width: parent.width - 4px;
+                                        horizontal-alignment: center;
+                                        text: bt.b.name;
+                                        font-size: 10.5px;
+                                        overflow: elide;
+                                        color: bt.on || bt.hov ? T.text : T.muted;
+                                    }
+                                    // your own picture: remove it (the small x on hover)
+                                    if bt.b.file != "" && bt.hov: Rectangle {
+                                        x: parent.width - 17px;
+                                        y: 1px;
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 8px;
+                                        background: xa.has-hover ? T.bad : T.bg.with-alpha(0.85);
+                                        Icon { width: 10px; height: 10px; commands: "M6 6l12 12 M18 6L6 18"; stroke: xa.has-hover ? white : T.text; stroke-width: 2.4px; }
+                                        xa := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { S.bg-remove(bt.b.file); }
+                                        }
+                                    }
+                                }
+                                // "Add your own…" after the last one
+                                if n == S.backdrops.length: at := LiftTile {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    radius: T.r-small;
+                                    fill: T.panel;
+                                    fill-hover: T.panel2;
+                                    clicked => { S.bg-add(); }
+                                    Rectangle {
+                                        x: 4px;
+                                        y: 4px;
+                                        width: parent.width - 8px;
+                                        height: 24px;
+                                        border-radius: 3px;
+                                        border-width: 1px;
+                                        border-color: at.hov ? T.accent : T.hover;
+                                        Icon { width: 14px; height: 14px; commands: "M12 5v14 M5 12h14"; stroke: at.hov ? T.text : T.muted; stroke-width: 2px; }
+                                    }
+                                    Text {
+                                        y: 30px;
+                                        width: parent.width;
+                                        horizontal-alignment: center;
+                                        text: "Your own";
+                                        font-size: 10.5px;
+                                        color: at.hov ? T.text : T.muted;
+                                    }
+                                }
+                            }
+                        }
+                        if S.bg-status != "": Note { text: S.bg-status; color: S.bg-status == "Choose a picture…" ? T.muted : T.warn; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Seg {
+                                opts: [{ label: "1×", value: 1 }, { label: "2×", value: 2 }, { label: "4×", value: 4 }];
+                                value: S.preview-zoom;
+                                picked(v) => { S.num("zoom", v); }
+                            }
+                            Text { text: "Slow pan"; font-size: 13px; color: T.text; vertical-alignment: center; horizontal-alignment: right; horizontal-stretch: 1; }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                on: S.pan;
+                                toggled(v) => { S.flag("ui.pan", v); }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            Text { text: "Colour-blind view"; font-size: 13px; color: T.text; }
+                            Seg {
+                                compact: true;
+                                opts: [{ label: "Off", value: 0 }, { label: "Deutan", value: 1 }, { label: "Protan", value: 2 }, { label: "Tritan", value: 3 }];
+                                value: S.cvd;
+                                picked(v) => { S.num("ui.cvd", v); }
+                            }
+                            Note {
+                                text: S.cvd == 1 ? "Deutan: green looks weak (the most common colour blindness)."
+                                    : S.cvd == 2 ? "Protan: red looks weak and dark."
+                                    : S.cvd == 3 ? "Tritan: blue and yellow are hard to tell apart (rare)."
+                                    : "See your crosshair the way colour-blind players do.";
+                            }
+                        }
+                        Note { text: "Real pixels (1× = as on screen). Changes show on screen right away."; }
+                    }
+                }
+            }
+        }
+    }
+    // Echo's toast + tooltip, over everything
+    ToastLayer { x: 0; y: 0; width: root.width; height: root.height; }
+    TipLayer { x: 0; y: 0; width: root.width; height: root.height; }
+    // resize edges (frameless window, not when maximized)
+    if root.custom-frame && !root.win-max: Rectangle {
+        Edge { dir: "n"; x: 8px; y: 0; width: parent.width - 16px; height: 5px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "s"; x: 8px; y: parent.height - 5px; width: parent.width - 16px; height: 5px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "w"; x: 0; y: 8px; width: 5px; height: parent.height - 16px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "e"; x: parent.width - 5px; y: 8px; width: 5px; height: parent.height - 16px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "nw"; x: 0; y: 0; width: 8px; height: 8px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "ne"; x: parent.width - 8px; y: 0; width: 8px; height: 8px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "sw"; x: 0; y: parent.height - 8px; width: 8px; height: 8px; go(d) => { root.win-act("resize:" + d); } }
+        Edge { dir: "se"; x: parent.width - 8px; y: parent.height - 8px; width: 8px; height: 8px; go(d) => { root.win-act("resize:" + d); } }
+    }
+}

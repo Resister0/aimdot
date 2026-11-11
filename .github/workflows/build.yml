@@ -1,0 +1,341 @@
+# Aimdot's release build in the PUBLIC repo (github.com/Resister0/aimdot): every file people download is built
+# here from the public source, so anyone can check what went into it. This file lives in the private repo as
+# ci/public-build.yml and is copied to .github/workflows/build.yml here on every publish (with ci/version.txt).
+#
+# Secrets in THIS (public) repo - all optional; without them the build still runs, just unsigned:
+#   CERTUM_USERNAME, CERTUM_TOTP_SECRET     Windows code signing (Certum Open Source certificate, SimplySign cloud)
+#   AIMDOT_SIGNING_KEY, AIMDOT_SIGNING_KEY_PASSWORD   minisign key (Tauri signer format) for the .sig files the
+#                                           future updater checks - Aimdot's own key, not Echo's
+name: Build Aimdot
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+# one publish at a time: two runs side by side both delete + re-create the "latest" release. Queued, not cancelled.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+jobs:
+  windows:
+    if: github.repository == 'Resister0/aimdot'
+    # ⚠ the Game Bar widget needs Visual Studio's UWP tools; if the widget step says they are missing on
+    # windows-latest, change this to windows-2022
+    runs-on: windows-latest
+    env:
+      # only WHETHER signing is set up - the secrets themselves go to the signing steps alone, never into the job
+      # (build scripts of dependencies must not be able to read them)
+      HAS_CERTUM: ${{ secrets.CERTUM_TOTP_SECRET != '' && secrets.CERTUM_USERNAME != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Version
+        # ci/version.txt = the number the private repo gave this publish; goes into both exes (About page) + the MSIX
+        shell: bash
+        run: |
+          V=$(cat ci/version.txt 2>/dev/null | tr -d ' \r\n'); [ -n "$V" ] || V="0.1.0"
+          sed -i '0,/^version = "0.1.0"/s//version = "'"$V"'"/' Cargo.toml
+          sed -i 's/Version="1\.0\.0\.0"/Version="'"$V"'.0"/' gamebar-widget/Package.appxmanifest
+          echo "AIMDOT_VERSION=$V" >> "$GITHUB_ENV"
+          grep -m1 '^version' Cargo.toml; grep -m1 'Version="' gamebar-widget/Package.appxmanifest
+      - name: Build
+        shell: bash
+        env:
+          # release build: the settings program checks sonela.app for updates (own builds never do -
+          # core/src/update.rs is_release_build); the updater's PUBLIC key (repo variable, not a secret) goes into it
+          AIMDOT_RELEASE: 1
+          AIMDOT_UPDATE_PUBKEY: ${{ vars.AIMDOT_UPDATE_PUBKEY }}
+        run: |
+          [ -n "$AIMDOT_UPDATE_PUBKEY" ] || echo "::warning::repo variable AIMDOT_UPDATE_PUBKEY not set - updates are shown, but not installed by themselves"
+          cargo build --release -p crosshair -p crosshair-settings
+          cargo test --release -p crosshair-core
+          ls -la target/release/aimdot.exe target/release/aimdot-settings.exe
+      - name: Code signing login (Certum)
+        # Certum "Open Source Code Signing in the Cloud": logs SimplySign Desktop in on this runner with the TOTP
+        # secret behind the SimplySign phone codes; Windows then sees the certificate like a smart card. Same action
+        # and commit as Echo's build (reviewed 9 Nov 2026). Not set = unsigned build; a failed login doesn't stop the
+        # release (unsigned then, with a warning).
+        id: certum
+        if: env.HAS_CERTUM == 'true'
+        continue-on-error: true
+        uses: jay0lee/certum-cloud-code-sign@a3324503499c49090869856eeeecfe95fb613d87 # v1
+        with:
+          username: ${{ secrets.CERTUM_USERNAME }}
+          totp_secret: ${{ secrets.CERTUM_TOTP_SECRET }}
+      - name: Sign the programs
+        # both exes signed in place (target/release), so the zip AND the installer carry signed copies
+        shell: bash
+        env:
+          SIGNTOOL: ${{ steps.certum.outputs.signtool-path }}
+          CERT_SHA1: ${{ steps.certum.outputs.cert-thumbprint }}
+        run: |
+          if [ -n "$SIGNTOOL" ] && [ -n "$CERT_SHA1" ]; then
+            # MSYS_NO_PATHCONV: Git Bash would turn /fd, /pa ... into paths (Echo run #50)
+            ST=$(printf '%s' "$SIGNTOOL" | tr '\\\\' '/')
+            for f in target/release/aimdot.exe target/release/aimdot-settings.exe; do
+              MSYS_NO_PATHCONV=1 "$ST" sign /sha1 "$CERT_SHA1" /tr http://time.certum.pl /td SHA256 /fd SHA256 "$f"
+              MSYS_NO_PATHCONV=1 "$ST" verify /pa "$f"
+            done
+            echo "Signed with Certum certificate $CERT_SHA1"
+            echo yes > signed-windows.txt
+          else
+            echo "::warning::Not code-signed (Certum secrets not set or the login failed)"
+          fi
+      - name: Portable zip
+        # the second Windows download: unzip anywhere, no install. Its .sig is made last (it covers the signed bytes).
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AIMDOT_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIMDOT_SIGNING_KEY_PASSWORD }}
+        run: |
+          rm -rf pack && mkdir -p pack/Aimdot
+          cp target/release/aimdot.exe target/release/aimdot-settings.exe LICENSE pack/Aimdot/
+          printf '%s\r\n' "Aimdot $AIMDOT_VERSION for Windows (64-bit) - portable" "" \
+            "Most people want Aimdot-Setup.exe instead (Start menu entry, updates itself)." "" \
+            "1. Unzip this folder somewhere you keep it (for example Documents\\Aimdot) - autostart remembers where it is." \
+            "2. Start aimdot.exe. The settings window opens; the crosshair stays when you close it (tray icon)." \
+            "This portable copy shows new versions but doesn't install them itself." \
+            "Exclusive-fullscreen DirectX games: install the Game Bar widget (AimdotWidget-x64.msix) and pick" \
+            "Game Bar mode in the settings (Overlay page)." "" \
+            "Some games don't allow crosshair overlays in ranked - check before you play." "" \
+            "Free software under the GNU GPL v3 or later (LICENSE). Source: https://github.com/Resister0/aimdot" > pack/Aimdot/README.txt
+          (cd pack && 7z a -tzip -mx=9 ../Aimdot-Windows.zip Aimdot >/dev/null)
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npx --yes @tauri-apps/cli@2 signer sign Aimdot-Windows.zip
+            test -s Aimdot-Windows.zip.sig
+          else
+            echo "no update signature (secret AIMDOT_SIGNING_KEY not set)"
+          fi
+          ls -la Aimdot-Windows.zip*
+      - name: Game Bar widget (MSIX)
+        # gamebar-widget/build.ps1: signed with the same certificate when the Certum login worked (Publisher = the
+        # certificate's subject, written into the manifest only for this build); otherwise -NoSign only checks that
+        # it builds - an unsigned MSIX can't be installed normally, so it is not released.
+        # A widget failure never stops the zip / installer / Linux release.
+        id: widget
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CERT_SHA1: ${{ steps.certum.outputs.cert-thumbprint }}
+        run: |
+          if ($env:CERT_SHA1) {
+            & .\gamebar-widget\build.ps1 -Thumbprint $env:CERT_SHA1
+          } else {
+            Write-Host "::warning::Game Bar widget not signed (no Certum login) - built only to check it, not released"
+            & .\gamebar-widget\build.ps1 -NoSign
+          }
+          $m = Get-ChildItem gamebar-widget\out -Filter 'AimdotWidget-*.msix' | Where-Object { $_.Name -notmatch '-(unsigned|dev)\.msix$' } | Select-Object -First 1
+          if ($m) { Copy-Item $m.FullName "AimdotWidget-x64.msix"; Get-Item AimdotWidget-x64.msix }
+      - name: Installer (Aimdot-Setup.exe)
+        # Echo's method: Tauri's NSIS bundler used ONLY as a packer (`tauri bundle` builds nothing) - installer/
+        # (tauri.conf.json, hooks.nsh, header/sidebar pictures, notice.txt; Cargo.toml there is a never-built stub the
+        # bundler needs). Per-user install into %LOCALAPPDATA%\Aimdot (no admin), Start menu entry "Aimdot", uninstall
+        # entry; Tauri's /P /R /UPDATE flags = the auto-update (settings/src/update.rs). The signed Game Bar MSIX goes
+        # inside when there is one (the installer then offers it). Certum signs aimdot.exe, the uninstaller and the
+        # setup itself through signCommand; the update signature (.sig) of the setup is made last.
+        # No continue-on-error: a release without the Windows installer must not go out.
+        shell: bash
+        working-directory: installer
+        env:
+          SIGNTOOL: ${{ steps.certum.outputs.signtool-path }}
+          CERT_SHA1: ${{ steps.certum.outputs.cert-thumbprint }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AIMDOT_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIMDOT_SIGNING_KEY_PASSWORD }}
+        run: |
+          V="$AIMDOT_VERSION"
+          # the licence page's first line says which Aimdot it installs: "Aimdot 0.1.4 - ..."
+          sed -i "1s/^Aimdot /Aimdot $V /" notice.txt && head -n 1 notice.txt
+          RES='"../target/release/aimdot-settings.exe":"aimdot-settings.exe","../LICENSE":"LICENSE.txt"'
+          if [ -f ../AimdotWidget-x64.msix ]; then RES="$RES"',"../AimdotWidget-x64.msix":"AimdotWidget.msix"'; echo "Game Bar widget goes into the installer"; fi
+          SIGN=""
+          if [ -n "$SIGNTOOL" ] && [ -n "$CERT_SHA1" ]; then
+            ST=$(printf '%s' "$SIGNTOOL" | tr '\\\\' '/')
+            # goes right after "windows":{ in the --config JSON below (hence the comma at the END)
+            SIGN='"signCommand":{"cmd":"'"$ST"'","args":["sign","/sha1","'"$CERT_SHA1"'","/tr","http://time.certum.pl","/td","SHA256","/fd","SHA256","%1"]},'
+          fi
+          # the bundler looks for target/release/aimdot.exe in the cargo target folder: the workspace's
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" npx --yes @tauri-apps/cli@2 bundle --bundles nsis \
+            --config '{"version":"'"$V"'","bundle":{"resources":{'"$RES"'},"windows":{'"$SIGN"'"webviewInstallMode":{"type":"skip"}}}}'
+          cp "$GITHUB_WORKSPACE"/target/release/bundle/nsis/*-setup.exe ../Aimdot-Setup.exe
+          if [ -n "$SIGN" ]; then
+            MSYS_NO_PATHCONV=1 "$ST" verify /pa ../Aimdot-Setup.exe || echo "::warning::Aimdot-Setup.exe signature doesn't verify"
+          fi
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            (cd .. && npx --yes @tauri-apps/cli@2 signer sign Aimdot-Setup.exe && test -s Aimdot-Setup.exe.sig)
+          else
+            echo "no update signature (secret AIMDOT_SIGNING_KEY not set) - the setup won't be offered as an auto-update"
+          fi
+          ls -la ../Aimdot-Setup.exe*
+      - name: Code signing logout
+        if: always() && steps.certum.outcome == 'success'
+        uses: jay0lee/certum-cloud-code-sign/teardown@a3324503499c49090869856eeeecfe95fb613d87 # v1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows
+          path: |
+            Aimdot-Setup.exe
+            Aimdot-Setup.exe.sig
+            Aimdot-Windows.zip
+            Aimdot-Windows.zip.sig
+            AimdotWidget-x64.msix
+            signed-windows.txt
+          if-no-files-found: warn
+
+  linux:
+    if: github.repository == 'Resister0/aimdot'
+    # Ubuntu 22.04 = older system libraries, so the build also runs on newer distros (Fedora / Nobara, Arch, Ubuntu 24...)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: System libraries
+        # a slow Ubuntu mirror once hung Echo's build for 40+ minutes: give up a stuck download after 30 s and retry
+        timeout-minutes: 30
+        run: |
+          APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get $APT update
+          # the overlay needs nothing but libc (Wayland + X11 in pure Rust); the Slint settings window links
+          # fontconfig/freetype and loads xkbcommon (+ xkbcommon-x11 on X11) at run time
+          sudo apt-get $APT install -y pkg-config libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libfuse2 file patchelf zsync
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Version
+        run: |
+          V=$(cat ci/version.txt 2>/dev/null | tr -d ' \r\n'); [ -n "$V" ] || V="0.1.0"
+          sed -i '0,/^version = "0.1.0"/s//version = "'"$V"'"/' Cargo.toml
+          echo "AIMDOT_VERSION=$V" >> "$GITHUB_ENV"
+          grep -m1 '^version' Cargo.toml
+      - name: Build
+        env:
+          # release build: update checks on (core/src/update.rs); the updater's public key (repo variable)
+          AIMDOT_RELEASE: 1
+          AIMDOT_UPDATE_PUBKEY: ${{ vars.AIMDOT_UPDATE_PUBKEY }}
+        run: |
+          cargo build --release
+          cargo test --release -p crosshair-core
+          ldd target/release/aimdot target/release/aimdot-settings
+      - name: Plain build (tar.gz)
+        run: |
+          rm -rf Aimdot-linux && mkdir -p Aimdot-linux
+          cp target/release/aimdot target/release/aimdot-settings LICENSE Aimdot-linux/
+          cat > Aimdot-linux/README.txt <<TXT
+          Aimdot $AIMDOT_VERSION for Linux (x86_64)
+          Start: ./aimdot   (opens the settings window; --tray = without it, --quit = stop it)
+          Keep both programs in the same folder. Needs fontconfig + xkbcommon (every desktop has them).
+          Hide-while-aiming reads the mouse through evdev: your user needs read access (most distros: the "input" group).
+          Some games don't allow crosshair overlays in ranked - check before you play.
+          Free software under the GNU GPL v3 or later (LICENSE). Source: https://github.com/Resister0/aimdot
+          TXT
+          tar -czf Aimdot-linux-x86_64.tar.gz Aimdot-linux
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+      - name: AppImage
+        # one file for most distros: aimdot + aimdot-settings (next to each other in usr/bin - the overlay starts
+        # the settings program from its own folder) and the libraries linuxdeploy gathers.
+        # Not bundled (the PC's own copies): libwayland-*, libxkbcommon* (winit loads them by name), libdbus.
+        # Exception (Echo's lesson, Echo commit bc55176, 10 Nov 2026): libxkbcommon-x11.so.0 + libxcb-xkb.so.1 ARE
+        # bundled - winit loads them by name on X11 and panics without them (AppImageHub's test system lacks them);
+        # found through the RUNPATH $ORIGIN/../lib linuxdeploy sets. Plus linuxdeploy's own excludelist (glibc, GL,
+        # X11, fontconfig, freetype...).
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: 1
+          INFO: gh-releases-zsync|Resister0|aimdot|latest|Aimdot-x86_64.AppImage.zsync
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AIMDOT_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIMDOT_SIGNING_KEY_PASSWORD }}
+        run: |
+          T=$RUNNER_TEMP/appimage; rm -rf "$T" AppDir Aimdot-x86_64.AppImage*; mkdir -p "$T/stage"
+          # linuxdeploy pinned + fingerprint (same file as Echo's build); appimagetool = the continuous build
+          curl -fsSL --retry 3 -o "$T/linuxdeploy" https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $T/linuxdeploy" | sha256sum -c -
+          curl -fsSL --retry 3 -o "$T/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$T/linuxdeploy" "$T/appimagetool"
+          # the id = the settings window's Wayland app_id / X11 class (settings/src/main.rs APP_ID): desktop file +
+          # icon must have exactly that name, or KDE / GNOME show no icon (same as scripts/install-dev-linux.sh)
+          ID=link.sonela.Aimdot
+          cp assets/icons/aimdot-256.png "$T/stage/$ID.png"
+          # same fields as the entry Aimdot writes itself on start (core/src/desktop_entry.rs) - never NoDisplay
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Aimdot' 'GenericName=Crosshair overlay' \
+            'Comment=A light crosshair overlay - change your crosshair here' 'Exec=aimdot' "Icon=$ID" \
+            "StartupWMClass=$ID" 'Categories=Game;' 'Keywords=crosshair;overlay;aim;' 'Terminal=false' > "$T/stage/$ID.desktop"
+          "$T/linuxdeploy" --appdir AppDir -e target/release/aimdot -e target/release/aimdot-settings \
+            -d "$T/stage/$ID.desktop" -i "$T/stage/$ID.png" \
+            --exclude-library 'libwayland-*' --exclude-library 'libxkbcommon*' --exclude-library 'libdbus-1.so*'
+          test -x AppDir/usr/bin/aimdot && test -x AppDir/usr/bin/aimdot-settings
+          for L in libxkbcommon-x11.so.0 libxcb-xkb.so.1; do cp -L "/usr/lib/x86_64-linux-gnu/$L" AppDir/usr/lib/; done
+          # hand-copied libraries get no RUNPATH from linuxdeploy: without $ORIGIN, libxkbcommon-x11 looks for its own
+          # libxcb-xkb only in the system folders (Echo's AppImageHub retest 2.0.3 failed on exactly that; Echo c16973e)
+          for L in libxkbcommon-x11.so.0 libxcb-xkb.so.1; do patchelf --set-rpath '$ORIGIN' "AppDir/usr/lib/$L"; done
+          readelf -d AppDir/usr/lib/libxkbcommon-x11.so.0 | grep -q 'RUNPATH.*\$ORIGIN' || { echo 'libxkbcommon-x11 has no $ORIGIN RUNPATH'; exit 1; }
+          if ldd AppDir/usr/lib/libxkbcommon-x11.so.0 | grep 'not found'; then echo "bundled libxkbcommon-x11 misses libraries"; exit 1; fi
+          readelf -d AppDir/usr/bin/aimdot-settings | grep -qE 'R(UN)?PATH.*\$ORIGIN/\.\./lib' || { echo "aimdot-settings has no \$ORIGIN/../lib RUNPATH - bundled libraries would not be found"; exit 1; }
+          ls AppDir/usr/lib; du -sh AppDir
+          ARCH=x86_64 "$T/appimagetool" --no-appstream -u "$INFO" AppDir Aimdot-x86_64.AppImage
+          chmod +x Aimdot-x86_64.AppImage
+          # read the update information - don't RUN the AppImage (it would start Aimdot on a runner without a display)
+          objcopy --dump-section .upd_info="$T/upd_info" Aimdot-x86_64.AppImage /dev/null
+          info=$(tr -d '\0' < "$T/upd_info")
+          case "$info" in gh-releases-zsync*) echo "update information: $info" ;; *) echo "no update information: '$info'"; exit 1 ;; esac
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            # minisign signature (base64, Tauri signer format) - the future updater checks it; also for checking by hand
+            npx --yes @tauri-apps/cli@2 signer sign Aimdot-x86_64.AppImage
+            test -s Aimdot-x86_64.AppImage.sig
+          else
+            echo "no update signature (secret AIMDOT_SIGNING_KEY not set)"
+          fi
+          # .zsync last, from the final file (AppImageUpdate / AppImageLauncher)
+          zsyncmake -u Aimdot-x86_64.AppImage -o Aimdot-x86_64.AppImage.zsync Aimdot-x86_64.AppImage
+          rm -rf AppDir
+          ls -la Aimdot-x86_64.AppImage*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux
+          path: |
+            Aimdot-linux-x86_64.tar.gz
+            Aimdot-x86_64.AppImage
+            Aimdot-x86_64.AppImage.sig
+            Aimdot-x86_64.AppImage.zsync
+          if-no-files-found: warn
+
+  release:
+    # publishes whatever built (one OS failing doesn't block the other)
+    needs: [windows, linux]
+    if: always() && (needs.windows.result == 'success' || needs.linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: out
+      - name: Publish as "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          msg=$(git log -1 --pretty=%s)
+          V=$(cat ci/version.txt 2>/dev/null | tr -d ' \r\n'); [ -n "$V" ] || V="0.1.0"
+          mkdir -p rel && find out -type f -exec cp {} rel/ \;
+          # signed-windows.txt = the Windows job's note that the exes were code-signed (not released itself)
+          signed="not code-signed yet"
+          [ -f rel/signed-windows.txt ] && signed="signed with a Certum open-source code-signing certificate"
+          rm -f rel/signed-windows.txt
+          (cd rel && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          widget=""
+          [ -f rel/AimdotWidget-x64.msix ] && widget="
+          Exclusive-fullscreen DirectX games: Aimdot-Setup.exe offers the Game Bar widget (or double-click AimdotWidget-x64.msix), then pick Game Bar mode in Aimdot's settings."
+          notes="Built from: $msg
+
+          Windows: download Aimdot-Setup.exe - it installs Aimdot for you (no admin), with a Start menu entry, and Aimdot updates itself from then on. No install wanted? Aimdot-Windows.zip (portable): unzip it somewhere you keep it and start aimdot.exe. The programs are $signed. If Windows says it protected your PC, click More info > Run anyway.$widget
+          Linux: download Aimdot-x86_64.AppImage, make it runnable (right-click > Properties > Allow executing, or chmod +x) and start it - it updates itself. (Aimdot-linux-x86_64.tar.gz = the plain programs; they tell you when there's a new version.)
+          SHA256SUMS lists every file's fingerprint; the .sig files are minisign signatures (Aimdot's updater checks them).
+
+          Some games don't allow crosshair overlays in ranked - check before you play.
+          Windows build: ${{ needs.windows.result }} / Linux build: ${{ needs.linux.result }}"
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest rel/* --title "Aimdot $V" --notes "$notes"

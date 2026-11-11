@@ -1,0 +1,345 @@
+// Profiles page: the saved crosshairs (save, use, rename, order, delete), share codes (copy / paste, also CS2 and
+// Valorant codes), and per-game switching. Rust side: src/profiles.rs (global Profs).
+import { T, Icon, Btn, Switch, Card, Row, Note, Pill } from "theme.slint";
+import { Field, PTitle, PIc } from "images.slint";
+
+export struct ProfItem {
+    name: string,
+    img: image,
+    on: bool,          // the crosshair on screen is this profile
+    changed: bool,     // ... but changed since it was saved
+    games: [string],   // games that switch to it
+    games-text: string, // "cs2, apex"
+    pixel: bool,       // an image crosshair
+}
+
+export struct Prog {
+    name: string,      // shown ("cs2.exe")
+    key: string,       // the rule's name ("cs2")
+    used: string,      // the profile it already belongs to ("" = none)
+}
+
+export global Profs {
+    in property <[ProfItem]> items;
+    in property <string> active;
+    in property <bool> active-changed;
+    in property <string> hk-text;         // "Ctrl + Alt + Right / Left"
+    in property <string> status;
+    in property <bool> status-ok: true;
+    in property <bool> games-on: true;
+    in property <string> games-note;      // what the per-game switch can see on this system
+    in property <[Prog]> progs;           // running programs (after "Running programs")
+    in property <int> prog-rows;
+    in property <bool> progs-busy;
+    in-out property <string> new-name;
+    in-out property <string> code-text;
+    in-out property <int> renaming: -1;
+    in-out property <string> rename-text;
+    in-out property <int> confirm: -1;    // the profile whose "Delete?" is showing
+    in-out property <int> games-open: -1; // the profile whose game list is open
+    in-out property <string> game-text;
+    callback save-new(string);
+    callback update-active();
+    callback use(int);
+    callback rename(int, string);
+    callback move(int, int);
+    callback delete(int);
+    callback code-of(int) -> string;      // "" = could not (status says why)
+    callback code-of-current() -> string;
+    callback add-code(string, bool);      // text, use it now
+    callback add-game(int, string);
+    callback remove-game(string);
+    callback list-progs();
+    callback games-switch(bool);
+}
+
+component Status inherits Note {
+    in property <string> msg;
+    in property <bool> ok;
+    text: root.msg;
+    color: root.ok ? T.muted : T.warn;
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> removable;
+    callback removed;
+    height: 24px;
+    border-radius: 12px;
+    background: T.panel2;
+    border-width: 1px;
+    border-color: T.line;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: root.removable ? 4px : 10px;
+        spacing: 4px;
+        Text { text: root.text; font-size: 12px; color: T.text; vertical-alignment: center; }
+        if root.removable: Rectangle {
+            width: 18px;
+            height: 18px;
+            y: 3px;
+            border-radius: 9px;
+            background: xta.has-hover ? T.bad : transparent;
+            Icon { width: 12px; height: 12px; commands: PIc.close; stroke: xta.has-hover ? white : T.muted; }
+            xta := TouchArea { mouse-cursor: pointer; clicked => { root.removed(); } }
+        }
+    }
+}
+
+component SmallIcon inherits Rectangle {
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> danger;
+    callback clicked;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: !root.enabled ? transparent : ta.pressed ? T.line : ta.has-hover ? (root.danger ? T.bad : T.hover) : transparent;
+    Icon {
+        width: 16px;
+        height: 16px;
+        commands: root.icon;
+        stroke: !root.enabled ? T.dim : ta.has-hover && root.danger ? white : T.muted;
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.clicked(); } }
+}
+
+export global PrIc {
+    out property <string> up: "M6 15l6-6 6 6";
+    out property <string> down: "M6 9l6 6 6-6";
+    out property <string> copy: "M9 9h10v11H9z M5 15V4h10";
+    out property <string> edit: "M4 20h4L19 9l-4-4L4 16z M13 7l4 4";
+    out property <string> game: "M6 9h12a3 3 0 0 1 3 3v3a3 3 0 0 1-5 2l-1-1H9l-1 1a3 3 0 0 1-5-2v-3a3 3 0 0 1 3-3z M8 11v3 M6.5 12.5h3 M16 12h.01 M17.5 13.5h.01";
+    out property <string> layers: "M12 4l8 4-8 4-8-4z M4 12l8 4 8-4 M4 16l8 4 8-4";
+}
+
+export component ProfilesPage inherits VerticalLayout {
+    spacing: 14px;
+    // the clipboard bridge (Slint's own clipboard): text in, select all, copy - or paste, then read
+    clip := TextInput { width: 0; height: 0; opacity: 0; single-line: true; }
+
+    PTitle { title: "Profiles"; sub: "Save your crosshairs, switch with a hotkey, share them as a code"; }
+
+    Card {
+        title: "Save the current crosshair";
+        HorizontalLayout {
+            spacing: 8px;
+            Field {
+                horizontal-stretch: 1;
+                text <=> Profs.new-name;
+                placeholder: "Name, e.g. \"Main\" or \"Sniper\"";
+                accepted(t) => { Profs.save-new(t); }
+            }
+            Btn { text: "Save as new"; icon: PIc.save; primary: true; small: true; y: 2px; clicked => { Profs.save-new(Profs.new-name); } }
+        }
+        if Profs.active != "": HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            alignment: start;
+            Note {
+                vertical-alignment: center;
+                text: Profs.active-changed ? "The crosshair was changed since \"" + Profs.active + "\" was saved." : "On screen now: \"" + Profs.active + "\".";
+            }
+            if Profs.active-changed: Btn { text: "Update \"" + Profs.active + "\""; small: true; clicked => { Profs.update-active(); } }
+        }
+        Note { text: Profs.hk-text == "" ? "Set a hotkey for next / previous profile on the Overlay page." : "Next / previous profile: " + Profs.hk-text + " (works in games too)."; }
+    }
+
+    Card {
+        title: "Your profiles";
+        if Profs.items.length == 0: Note { text: "No profiles yet. Make a crosshair on the Designer, Images or Painter page, then save it above - or paste a code below."; }
+        for it[i] in Profs.items: VerticalLayout {
+            padding-top: 4px;
+            spacing: 6px;
+            Rectangle {
+                height: 56px;
+                border-radius: 10px;
+                background: rta.has-hover ? T.hover : T.panel2;
+                border-width: it.on ? 2px : 0;
+                border-color: T.accent;
+                rta := TouchArea { mouse-cursor: pointer; clicked => { Profs.confirm = -1; Profs.use(i); } }
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 6px;
+                    spacing: 10px;
+                    Rectangle {
+                        width: 44px;
+                        height: 44px;
+                        y: 6px;
+                        border-radius: 8px;
+                        background: T.bg;
+                        Image { width: 40px; height: 40px; source: it.img; image-fit: contain; image-rendering: pixelated; }
+                    }
+                    if Profs.renaming == i: Field {
+                        horizontal-stretch: 1;
+                        y: 11px;
+                        text <=> Profs.rename-text;
+                        placeholder: "New name";
+                        accepted(t) => { Profs.rename(i, t); }
+                    }
+                    if Profs.renaming != i: VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: it.name; font-size: 14px; font-weight: 600 + T.fw; color: T.text; overflow: elide; }
+                            if it.on: Text { text: it.changed ? "on screen, changed" : "on screen"; font-size: 11.5px; color: T.accent; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Text {
+                            text: it.games.length == 0 ? (it.pixel ? "Picture" : "Designer") : "Switches on for: " + it.games-text;
+                            overflow: elide;
+                            font-size: 11.5px;
+                            color: T.muted;
+                        }
+                    }
+                    if Profs.renaming == i: Btn { y: 13px; text: "OK"; small: true; primary: true; clicked => { Profs.rename(i, Profs.rename-text); } }
+                    if Profs.renaming == i: Btn { y: 13px; text: "Cancel"; small: true; clicked => { Profs.renaming = -1; } }
+                    if Profs.renaming != i && Profs.confirm != i: HorizontalLayout {
+                        horizontal-stretch: 0;
+                        spacing: 2px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        SmallIcon { icon: PrIc.game; clicked => { Profs.games-open = Profs.games-open == i ? -1 : i; Profs.game-text = ""; } }
+                        SmallIcon {
+                            icon: PrIc.copy;
+                            clicked => {
+                                clip.text = Profs.code-of(i);
+                                if clip.text != "" {
+                                    clip.select-all();
+                                    clip.copy();
+                                }
+                            }
+                        }
+                        SmallIcon { icon: PrIc.edit; clicked => { Profs.renaming = i; Profs.rename-text = it.name; Profs.confirm = -1; } }
+                        SmallIcon { icon: PrIc.up; enabled: i > 0; clicked => { Profs.move(i, -1); } }
+                        SmallIcon { icon: PrIc.down; enabled: i < Profs.items.length - 1; clicked => { Profs.move(i, 1); } }
+                        SmallIcon { icon: PIc.trash; danger: true; clicked => { Profs.confirm = i; } }
+                    }
+                    if Profs.confirm == i: HorizontalLayout {
+                        horizontal-stretch: 0;
+                        spacing: 6px;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        Text { text: "Delete \"" + it.name + "\"?"; font-size: 12.5px; color: T.text; vertical-alignment: center; }
+                        Btn { text: "Delete"; small: true; danger: true; clicked => { Profs.confirm = -1; Profs.delete(i); } }
+                        Btn { text: "No"; small: true; clicked => { Profs.confirm = -1; } }
+                    }
+                }
+            }
+            // games that use this profile
+            if Profs.games-open == i: Rectangle {
+                border-radius: 10px;
+                background: T.bg;
+                border-width: 1px;
+                border-color: T.line;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+                    Text { text: "Games that switch to \"" + it.name + "\" when they are in front"; font-size: 12.5px; font-weight: 600 + T.fw; color: T.text; }
+                    if it.games.length == 0: Note { text: "None yet."; }
+                    if it.games.length > 0: HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        for g in it.games: Chip { text: g; removable: true; removed => { Profs.remove-game(g); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Field {
+                            horizontal-stretch: 1;
+                            text <=> Profs.game-text;
+                            placeholder: "Program name, e.g. cs2.exe or VALORANT-Win64-Shipping.exe";
+                            accepted(t) => { Profs.add-game(i, t); }
+                        }
+                        Btn { text: "Add"; small: true; y: 2px; clicked => { Profs.add-game(i, Profs.game-text); } }
+                        Btn { text: Profs.progs-busy ? "Looking…" : "Running programs"; small: true; y: 2px; clicked => { Profs.list-progs(); } }
+                    }
+                    if Profs.status != "": Status { msg: Profs.status; ok: Profs.status-ok; }
+                    if Profs.progs.length > 0: Note { text: "Start the game first, then click it here:"; }
+                    if Profs.progs.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        for row in Profs.prog-rows: HorizontalLayout {
+                            spacing: 6px;
+                            for k in 3: Rectangle {
+                                property <int> n: row * 3 + k;
+                                height: 28px;
+                                if n < Profs.progs.length: Rectangle {
+                                    border-radius: 14px;
+                                    background: pta.has-hover ? T.hover : T.panel2;
+                                    border-width: 1px;
+                                    border-color: Profs.progs[n].used == it.name ? T.accent : T.line;
+                                    Text {
+                                        x: 10px;
+                                        width: parent.width - 20px;
+                                        text: Profs.progs[n].name + (Profs.progs[n].used != "" && Profs.progs[n].used != it.name ? "  (" + Profs.progs[n].used + ")" : "");
+                                        font-size: 12px;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                        color: Profs.progs[n].used != "" ? T.muted : T.text;
+                                    }
+                                    pta := TouchArea { mouse-cursor: pointer; clicked => { Profs.add-game(i, Profs.progs[n].name); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if Profs.items.length > 1: Note { text: "Click a profile to use it. The order here is the hotkey order."; }
+    }
+
+    Card {
+        title: "Share codes";
+        Note { text: "Copy a profile's code with its copy button, or the crosshair on screen right now. Paste a code from a friend - Aimdot codes (AIM1:…), CS2 codes (CSGO-…) and Valorant profile codes work."; }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            Field {
+                horizontal-stretch: 1;
+                text <=> Profs.code-text;
+                placeholder: "Paste an Aimdot, CS2 or Valorant crosshair code";
+                accepted(t) => { Profs.add-code(t, true); }
+            }
+            Btn {
+                text: "Paste";
+                small: true;
+                y: 2px;
+                clicked => {
+                    clip.text = "";
+                    clip.paste();
+                    Profs.code-text = clip.text;
+                }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            alignment: start;
+            Btn { text: "Use it now"; primary: true; small: true; enabled: Profs.code-text != ""; clicked => { Profs.add-code(Profs.code-text, true); } }
+            Btn { text: "Only add to my profiles"; small: true; enabled: Profs.code-text != ""; clicked => { Profs.add-code(Profs.code-text, false); } }
+            Btn {
+                text: "Copy the crosshair on screen";
+                icon: PrIc.copy;
+                small: true;
+                clicked => {
+                    clip.text = Profs.code-of-current();
+                    if clip.text != "" {
+                        clip.select-all();
+                        clip.copy();
+                    }
+                }
+            }
+        }
+        if Profs.status != "" && Profs.games-open < 0: Status { msg: Profs.status; ok: Profs.status-ok; }
+    }
+
+    Card {
+        title: "Per-game crosshair";
+        has-switch: true;
+        on: Profs.games-on;
+        toggled(v) => { Profs.games-switch(v); }
+        Note { text: "Give a profile a game with its game button above. When that game is in front, Aimdot switches to the profile; when you leave the game, the crosshair from before comes back."; }
+        if Profs.games-note != "": Note { text: Profs.games-note; }
+    }
+}

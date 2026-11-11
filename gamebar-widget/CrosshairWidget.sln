@@ -1,0 +1,35 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CrosshairWidget", "CrosshairWidget.csproj", "{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+		Debug|ARM64 = Debug|ARM64
+		Release|ARM64 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|x64.ActiveCfg = Debug|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|x64.Build.0 = Debug|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|x64.Deploy.0 = Debug|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|x64.ActiveCfg = Release|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|x64.Build.0 = Release|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|x64.Deploy.0 = Release|x64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|ARM64.Build.0 = Debug|ARM64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|ARM64.ActiveCfg = Release|ARM64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|ARM64.Build.0 = Release|ARM64
+		{42BAC6C1-AC9B-4E44-8130-AA1A6276A6E1}.Release|ARM64.Deploy.0 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {47B558FA-8155-4AC3-A13F-2EAFB55B32D5}
+	EndGlobalSection
+EndGlobal

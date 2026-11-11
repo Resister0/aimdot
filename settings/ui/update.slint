@@ -1,0 +1,92 @@
+// Auto-update UI (src/update.rs fills `Upd`; main.rs: `let _updater = update::wire!(ui);`).
+// app.slint: import { Upd, UpdateBanner, UpdateCard } from "update.slint"; + `export { Upd }` (Rust needs it),
+// UpdateBanner { } above the pages, UpdateCard { } in Settings > About.
+import { T, Btn, Card, Row, Note, Find } from "theme.slint";
+
+export global Upd {
+    // a newer Aimdot is known (update.ini / the last check)
+    in-out property <bool> available;
+    in-out property <string> version;
+    in-out property <string> notes;
+    // About > Updates: "You have the newest version (0.1.3).", "Checking…", "Couldn't check…", own-build note
+    in-out property <string> status;
+    // "Update now" (installs itself) / "Download" (opens sonela.app/aimdot) / "Updating…"
+    in-out property <string> button: "Update now";
+    in-out property <bool> busy;
+    // release build, not Flatpak: "Check for updates" makes sense
+    in-out property <bool> can-check;
+    callback check();
+    callback install();
+}
+
+// One slim line above the pages while a newer version is known: "Update to Aimdot 0.1.7" + the button.
+export component UpdateBanner inherits Rectangle {
+    height: Upd.available ? 46px : 0px;
+    visible: Upd.available;
+    background: T.panel;
+    border-radius: T.r-card;
+    border-width: 1px;
+    border-color: T.accent;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 8px;
+        spacing: 10px;
+        Rectangle {
+            width: 8px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: T.grad;
+            }
+        }
+        Text {
+            text: Upd.busy ? Upd.status : "Update to Aimdot " + Upd.version;
+            font-size: 13.5px;
+            font-weight: 600 + T.fw;
+            color: T.text;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Btn {
+            y: (parent.height - self.height) / 2;
+            text: Upd.button;
+            primary: true;
+            small: true;
+            enabled: !Upd.busy;
+            clicked => { Upd.install(); }
+        }
+    }
+}
+
+// Settings > About: "Updates" card - status line, "Check for updates", and the install button when there is one.
+export component UpdateCard inherits VerticalLayout {
+    if (Find.q == "" || Find.matches(Find.q, "about update updates new version check download install upgrade")): Card {
+        title: "Updates";
+        Row {
+            label: Upd.available ? "Aimdot " + Upd.version + " is out" : "Aimdot updates";
+            sub: Upd.status;
+            HorizontalLayout {
+                spacing: 8px;
+                if Upd.can-check: Btn {
+                    y: (parent.height - self.height) / 2;
+                    text: "Check for updates";
+                    small: true;
+                    enabled: !Upd.busy;
+                    clicked => { Upd.check(); }
+                }
+                if Upd.available: Btn {
+                    y: (parent.height - self.height) / 2;
+                    text: Upd.button;
+                    primary: true;
+                    small: true;
+                    enabled: !Upd.busy;
+                    clicked => { Upd.install(); }
+                }
+            }
+        }
+        if Upd.available && Upd.notes != "": Note { text: "What's new: " + Upd.notes; }
+        Note { text: "Aimdot checks sonela.app every few hours. The check sends only Aimdot's version and your system type (Windows or Linux) - no ID, nothing about you."; }
+    }
+}

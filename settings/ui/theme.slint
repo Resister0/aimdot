@@ -1,0 +1,921 @@
+// Echo's look (copied from Echo's prototype-native/ui/theme.slint + settings.slint: colours, buttons, switch,
+// slider, segmented control, nav buttons, top glow, colour picker). Same author, so the code can move here.
+
+export global T {
+    in-out property <int> fw: 0;
+    in-out property <color> bg: #0d0d10;
+    in-out property <color> rail: #0a0a0c;
+    in-out property <color> panel: #16161a;
+    in-out property <color> panel2: #1e1e23;
+    in-out property <color> line: #26262c;
+    in-out property <color> hover: #34343c;
+    in-out property <color> text: #f5f5f7;
+    in-out property <color> muted: #a0a0ab;
+    in-out property <color> dim: #6b6b76;
+    // Aimdot's own coral (theme "", src/theme.rs); Rust puts the picked theme in here
+    in-out property <color> accent: #ef6a4c;
+    in-out property <color> accent2: #f49782;
+    out property <color> ok: #34d399;
+    out property <color> bad: #fb5c7c;
+    out property <color> warn: #f0a93a;
+    in-out property <color> g0: #ff8f6b;
+    in-out property <color> g1: #ef6a4c;
+    in-out property <color> g2: #e0485e;
+    out property <brush> grad: @linear-gradient(135deg, g0 0%, g1 55%, g2 100%);
+    out property <length> radius: 14px;
+    // Aimdot is a precise tool: corners one step sharper than Echo's (Echo: cards 12-14, buttons 10, tooltips 7)
+    out property <length> r-card: 8px;
+    out property <length> r-tile: 6px;
+    out property <length> r-btn: 6px;
+    out property <length> r-small: 5px;
+    // Echo: .15 s for buttons, .18 s for cards (the lift); the shadow is NOT animated (an animated blur smears)
+    out property <duration> fade: 150ms;
+    out property <duration> lift: 180ms;
+    out property <duration> press: 90ms;
+    // Echo's lesson (11 Nov 2026, idle CPU): true while RGB turns the theme colours (src/main.rs rgb_tick). The colour
+    // fades (`animate background / border-color / color`) are then off (`enabled: !T.rgb-live`): every hue step would
+    // restart them and the window would redraw at the monitor's full rate nonstop (60-165 fps) instead of once per
+    // step. A 0 ms duration still costs a 2nd frame per step; enabled: false doesn't. Opacity / movement fades stay.
+    in-out property <bool> rgb-live;
+}
+
+export global Ic {
+    out property <string> cross: "M12 3v6 M12 15v6 M3 12h6 M15 12h6";
+    out property <string> monitor: "M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M9 21h6 M12 17v4";
+    out property <string> info: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z M12 11v6 M12 7.5v.5";
+    out property <string> dice: "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M9 9h.01 M15 15h.01 M15 9h.01 M9 15h.01";
+    out property <string> reset: "M4 12a8 8 0 1 0 2.5-5.8 M4 4v4h4";
+    out property <string> power: "M12 3v8 M6.3 6.3a8 8 0 1 0 11.4 0";
+    out property <string> shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z";
+    out property <string> gear: "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z";
+    out property <string> keys: "M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z M6 10h.01 M10 10h.01 M14 10h.01 M18 10h.01 M7 14h10";
+    out property <string> search: "M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14z M20 20l-4-4";
+    out property <string> palette: "M12 3a9 9 0 1 0 0 18c.9 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-7.9-9-7.9z M7.5 11h.01 M10 7.5h.01 M14.5 7.5h.01 M17 11h.01";
+}
+
+export component Icon inherits Path {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    fill: transparent;
+    width: 20px;
+    height: 20px;
+}
+
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> small;
+    in property <bool> enabled: true;
+    callback clicked;
+    property <bool> hov: ta.has-hover && root.enabled;
+    opacity: !root.enabled ? 0.55 : 1;
+    animate opacity { duration: T.fade; }
+    height: small ? 30px : 36px;
+    width: text == "" ? self.height : hl.preferred-width;
+    border-radius: T.r-btn;
+    border-width: primary ? 0 : 1px;
+    border-color: danger && hov ? T.bad : hov ? T.hover : T.line;
+    background: primary ? T.grad : hov ? T.panel2 : T.panel;
+    drop-shadow-blur: primary ? 20px : 0;
+    drop-shadow-offset-y: primary ? 6px : 0;
+    drop-shadow-color: T.accent.with-alpha(0.25);
+    animate background, border-color { duration: T.fade; enabled: !T.rgb-live; }
+    property <color> fg: danger && hov ? T.bad : T.text;
+    // Echo: Tab reaches the button (a click never takes the keys), Enter / Space press it, :focus-visible ring
+    fs := FocusScope {
+        focus-on-click: false;
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if ((e.text == Key.Return || e.text == " ") && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    if fs.has-focus: Rectangle {
+        x: -4px;
+        y: -4px;
+        width: root.width + 8px;
+        height: root.height + 8px;
+        border-radius: T.r-btn + 4px;
+        border-width: 2px;
+        border-color: T.accent2;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+    if root.primary && root.hov: Rectangle {
+        border-radius: T.r-btn;
+        background: #ffffff1c;
+    }
+    hl := HorizontalLayout {
+        padding-left: root.text == "" ? 0 : (root.small ? 11px : 15px);
+        padding-right: root.text == "" ? 0 : (root.small ? 11px : 15px);
+        spacing: 8px;
+        alignment: center;
+        transform-scale: ta.pressed && root.enabled ? 0.96 : 1;
+        animate transform-scale { duration: T.press; }
+        if root.icon != "": Icon {
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            commands: root.icon;
+            stroke: root.primary ? white : root.fg;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: root.small ? 13px : 14px;
+            font-weight: (root.primary ? 600 : 500) + T.fw;
+            color: root.primary ? white : root.fg;
+        }
+    }
+}
+
+export component Switch inherits Rectangle {
+    in property <bool> on;
+    in property <bool> dim;
+    callback toggled(bool);
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background: on ? T.accent : #3a3a3a;
+    opacity: dim ? 0.45 : 1;
+    animate background { duration: 150ms; enabled: !T.rgb-live; }
+    Rectangle {
+        x: root.on ? 21px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: white;
+        animate x { duration: 150ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.on); }
+    }
+}
+
+// Echo's range input, but live: `moved` fires while dragging (the crosshair on screen follows the slider).
+// The mouse wheel / arrow keys over it move one step (fine 1 px adjustments).
+export component Slider inherits Rectangle {
+    in property <float> value;
+    in property <float> lo;
+    in property <float> hi: 1;
+    in property <float> step: 1;
+    callback moved(float);
+    width: 200px;
+    height: 24px;
+    property <float> frac: root.hi > root.lo ? clamp((root.value - root.lo) / (root.hi - root.lo), 0, 1) : 0;
+    function put(v: float) {
+        root.moved(clamp(round(v / root.step) * root.step, root.lo, root.hi));
+    }
+    Rectangle {
+        y: 10px;
+        height: 4px;
+        border-radius: 2px;
+        background: T.hover;
+    }
+    Rectangle {
+        x: 0;
+        y: 10px;
+        width: 8px + (root.width - 16px) * root.frac;
+        height: 4px;
+        border-radius: 2px;
+        background: T.accent;
+    }
+    Rectangle {
+        x: (root.width - 16px) * root.frac;
+        y: 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: white;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #00000080;
+    }
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
+                root.put(root.value - root.step);
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.UpArrow) {
+                root.put(root.value + root.step);
+                return accept;
+            }
+            reject
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        function at(px: length) {
+            root.put((px - 8px) / max(1px, root.width - 16px) * (root.hi - root.lo) + root.lo);
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                fs.focus();
+                self.at(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.at(self.mouse-x);
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y > 0) {
+                root.put(root.value + root.step);
+            } else if (e.delta-y < 0) {
+                root.put(root.value - root.step);
+            }
+            accept
+        }
+    }
+}
+
+export struct Opt {
+    label: string,
+    value: int,
+}
+
+export component Seg inherits Rectangle {
+    in property <[Opt]> opts;
+    in property <int> value;
+    in property <bool> compact;   // smaller text + padding (narrow spots like the preview column)
+    callback picked(int);
+    height: compact ? 34px : 38px;
+    width: hl.preferred-width;
+    background: T.bg;
+    border-radius: T.r-btn + 1px;
+    border-width: 1px;
+    border-color: T.line;
+    hl := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for o in root.opts: Rectangle {
+            width: st.preferred-width + (root.compact ? 18px : 28px);
+            border-radius: T.r-small;
+            background: o.value == root.value ? T.panel2 : transparent;
+            animate background { duration: 150ms; enabled: !T.rgb-live; }
+            st := Text {
+                text: o.label;
+                font-size: root.compact ? 12px : 13px;
+                font-weight: 500 + T.fw;
+                color: o.value == root.value || sta.has-hover ? T.text : T.muted;
+                transform-scale: sta.pressed ? 0.94 : 1;
+                animate transform-scale { duration: T.press; }
+                animate color { duration: T.fade; enabled: !T.rgb-live; }
+            }
+            sta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(o.value); }
+            }
+        }
+    }
+}
+
+export component NavBtn inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> on;
+    in property <bool> faded;   // Echo: the section list while searching
+    callback clicked;
+    opacity: root.faded ? 0.5 : 1;
+    animate opacity { duration: T.fade; }
+    // Echo's rail rows: accent wash + thin accent edge on hover, a bit more when open; 0.98 while pressed
+    height: 38px;
+    border-radius: T.r-btn;
+    border-width: 1px;
+    background: on ? T.accent.with-alpha(0.10) : ta.has-hover ? T.accent.with-alpha(0.06) : transparent;
+    border-color: on ? T.accent.with-alpha(0.22) : ta.has-hover ? T.accent.with-alpha(0.32) : transparent;
+    animate background, border-color { duration: 200ms; enabled: !T.rgb-live; }
+    transform-scale: ta.pressed ? 0.98 : 1;
+    animate transform-scale { duration: T.press; }
+    Rectangle {
+        x: 0;
+        y: 10px;
+        width: 2px;
+        height: parent.height - 20px;
+        border-top-right-radius: 3px;
+        border-bottom-right-radius: 3px;
+        background: T.accent.with-alpha(0.9);
+        opacity: root.on ? 1 : 0;
+        animate opacity { duration: 200ms; }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        spacing: 10px;
+        Icon {
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            commands: root.icon;
+            stroke: root.on || ta.has-hover ? T.text : T.muted;
+        }
+        Text {
+            text: root.label;
+            font-size: 14px;
+            color: root.on || ta.has-hover ? T.text : T.muted;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Echo's main background glow (radial accent at the top right)
+export component TopGlow inherits Rectangle {
+    clip: true;
+    Rectangle {
+        x: parent.width * 0.7 - 380px;
+        y: -120px - 380px;
+        width: 760px;
+        height: 760px;
+        transform-scale-x: 900 / 380;
+        background: @radial-gradient(circle, T.accent.with-alpha(0.11) 0%, T.accent.with-alpha(0.0) 70%);
+    }
+}
+
+// A settings card (Echo's .cgrp): title + optional switch in the header, rows below
+export component Card inherits Rectangle {
+    in property <string> title;
+    in property <bool> has-switch;
+    in property <bool> on: true;
+    callback toggled(bool);
+    background: T.panel;
+    border-radius: T.r-card;
+    border-width: 1px;
+    border-color: T.line;
+    VerticalLayout {
+        padding: 16px;
+        padding-top: 12px;
+        spacing: 2px;
+        if root.title != "": HorizontalLayout {
+            height: 32px;
+            Text {
+                text: root.title;
+                font-size: 15px;
+                font-weight: 700 + T.fw;
+                color: T.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if root.has-switch: Switch {
+                y: (parent.height - self.height) / 2;
+                on: root.on;
+                toggled(v) => { root.toggled(v); }
+            }
+        }
+        @children
+    }
+}
+
+// Echo's settings search: the text in the box + a word match done in Rust (case-insensitive, every word)
+export global Find {
+    in-out property <string> q;
+    pure callback matches(string, string) -> bool;
+}
+
+// label (+ value) on the left, a control on the right; a row that matches the search is highlighted
+export component Row inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> sub;
+    in property <string> val;
+    property <bool> hit: Find.q != "" && Find.matches(Find.q, root.label + " " + root.sub);
+    height: max(40px, lv.preferred-height + 12px);
+    spacing: 14px;
+    lv := VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.label;
+                font-size: 13.5px;
+                font-weight: root.hit ? 600 + T.fw : 400 + T.fw;
+                color: root.hit ? T.accent2 : T.text;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            if root.val != "": Text {
+                text: root.val;
+                font-size: 12.5px;
+                color: T.muted;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                min-width: 54px;
+            }
+        }
+        if root.sub != "": Text {
+            text: root.sub;
+            font-size: 12px;
+            color: T.muted;
+            wrap: word-wrap;
+        }
+    }
+    @children
+}
+
+export component Note inherits Text {
+    font-size: 12.5px;
+    color: T.muted;
+    wrap: word-wrap;
+}
+
+// Colour picker (Echo's ColorPop): saturation/value square, hue bar, hex field. The owner gives h/s/v and gets `changed`.
+export component ColorPick inherits Rectangle {
+    in property <float> h;   // 0..360
+    in property <float> s;   // 0..1
+    in property <float> v;   // 0..1
+    in property <color> cur;
+    in property <string> hex;
+    // RGB (Echo's, "like Vape v4"): double-click the round preview = this colour cycles through the rainbow
+    in property <bool> rgb-ok;   // this colour can do RGB
+    in property <bool> rgb;      // RGB is on
+    callback changed(float, float, float);
+    callback hex-entered(string);
+    callback toggle-rgb();
+    property <color> hue-color: hsv(root.h, 1, 1);
+    height: 196px;
+    sq := Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 130px;
+        border-radius: T.r-small;
+        clip: true;
+        background: @linear-gradient(90deg, #ffffff 0%, root.hue-color 100%);
+        Rectangle { background: @linear-gradient(180deg, #00000000 0%, #000000 100%); }
+        Rectangle {
+            x: root.s * parent.width - 7px;
+            y: (1 - root.v) * parent.height - 7px;
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            border-width: 2px;
+            border-color: white;
+            drop-shadow-blur: 2px;
+            drop-shadow-color: #0008;
+        }
+        TouchArea {
+            mouse-cursor: crosshair;
+            function at() {
+                root.changed(root.h, clamp(self.mouse-x / self.width, 0, 1), clamp(1 - self.mouse-y / self.height, 0, 1));
+            }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { self.at(); }
+            }
+            moved => { if (self.pressed) { self.at(); } }
+        }
+    }
+    Rectangle {
+        x: 0;
+        y: 146px;
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        background: root.cur;
+        border-width: root.rgb ? 2px : 1px;
+        border-color: root.rgb ? white : T.hover;
+        pa := TouchArea {
+            mouse-cursor: root.rgb-ok ? MouseCursor.pointer : MouseCursor.default;
+            double-clicked => { if (root.rgb-ok) { root.toggle-rgb(); } }
+        }
+    }
+    if root.rgb-ok && (pa.has-hover || root.rgb): Text {
+        x: 0;
+        y: 182px;
+        text: root.rgb ? "RGB on - double-click to stop" : "Double-click: RGB";
+        font-size: 10.5px;
+        color: root.rgb ? T.text : T.dim;
+    }
+    Rectangle {
+        x: 48px;
+        y: 157px;
+        width: parent.width - 48px - 110px;
+        height: 12px;
+        border-radius: 6px;
+        background: @linear-gradient(90deg, #ff0000 0%, #ffff00 16.7%, #00ff00 33.3%, #00ffff 50%, #0000ff 66.7%, #ff00ff 83.3%, #ff0000 100%);
+        Rectangle {
+            x: root.h / 360 * parent.width - 8px;
+            y: -2px;
+            width: 16px;
+            height: 16px;
+            border-radius: T.r-small;
+            background: root.hue-color;
+            border-width: 2px;
+            border-color: white;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            function at() {
+                root.changed(clamp(self.mouse-x / self.width * 360, 0, 359.9), root.s, root.v);
+            }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { self.at(); }
+            }
+            moved => { if (self.pressed) { self.at(); } }
+        }
+    }
+    Rectangle {
+        x: parent.width - 96px;
+        y: 147px;
+        width: 96px;
+        height: 32px;
+        border-radius: T.r-small;
+        border-width: 1px;
+        border-color: T.line;
+        background: T.bg;
+        TextInput {
+            x: 8px;
+            width: parent.width - 16px;
+            text: root.hex;
+            color: T.text;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            single-line: true;
+            accepted => { root.hex-entered(self.text); }
+        }
+    }
+}
+
+// ---------- Echo's top bar pieces (Echo's prototype-native/ui/theme.slint + app.slint) ----------
+
+// Echo's .pill: a dot + short text
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> dot: transparent;
+    in property <length> max-w: 100000px;
+    height: 30px;
+    width: min(hl.preferred-width, root.max-w);
+    border-radius: 15px;
+    background: T.panel;
+    border-width: 1px;
+    border-color: T.line;
+    hl := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        if root.dot != transparent: Rectangle {
+            width: 8px;
+            height: 8px;
+            y: (parent.height - 8px) / 2;
+            border-radius: 4px;
+            background: root.dot;
+        }
+        Text {
+            text: root.text;
+            font-size: 12.5px;
+            color: T.muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    @children
+}
+
+// Echo's kbd
+export component Kbd inherits Rectangle {
+    in property <string> text;
+    height: 20px;
+    width: kt.preferred-width + 12px;
+    border-radius: 4px;
+    background: T.panel2;
+    border-width: 1px;
+    border-color: T.hover;
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: T.hover;
+        border-bottom-left-radius: 5px;
+        border-bottom-right-radius: 5px;
+    }
+    kt := Text {
+        y: 3px;
+        text: root.text;
+        font-size: 11px;
+        font-weight: 600 + T.fw;
+        color: T.text;
+    }
+}
+
+// Echo's round icon button (.ib)
+export component IconBtn inherits Rectangle {
+    in property <string> icon;
+    in property <bool> on;
+    callback clicked;
+    width: 30px;
+    height: 30px;
+    border-radius: T.r-btn;
+    background: root.on ? T.accent.with-alpha(0.14) : ta.has-hover ? T.panel2 : transparent;
+    border-width: 1px;
+    border-color: root.on ? T.accent.with-alpha(0.5) : ta.has-hover ? T.hover : transparent;
+    animate background { duration: T.fade; enabled: !T.rgb-live; }
+    Icon {
+        width: 16px;
+        height: 16px;
+        commands: root.icon;
+        stroke: root.on || ta.has-hover ? T.text : T.muted;
+        transform-scale: ta.pressed ? 0.88 : 1;
+        animate transform-scale { duration: T.press; }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Echo's library card hover (.card:hover): lifts 3 px (180 ms ease-out), accent edge at 40 %, a shadow that switches
+// on at once; the chosen one gets the accent edge at 90 %. Pressed: 0.97 (Echo's click feel). The mouse area stays
+// put while the tile lifts (no flicker at the bottom edge); children go on the lifted part, buttons in them still work.
+export component LiftTile inherits Rectangle {
+    in property <bool> on;
+    in property <length> radius: T.r-tile;
+    in property <brush> fill: T.panel2;
+    in property <brush> fill-hover: T.hover;
+    in property <length> edge: 1px;          // the chosen tile's edge is 2 px
+    out property <bool> hov: ta.has-hover;
+    callback clicked;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Rectangle {
+        y: root.hov ? -3px : 0;
+        animate y { duration: T.lift; easing: ease-out; }
+        width: root.width;
+        height: root.height;
+        border-radius: root.radius;
+        background: root.hov ? root.fill-hover : root.fill;
+        animate background { duration: T.fade; enabled: !T.rgb-live; }
+        border-width: root.on ? 2px : root.edge;
+        border-color: root.on ? T.accent.with-alpha(0.9) : root.hov ? T.accent.with-alpha(0.4) : T.line;
+        animate border-color { duration: T.lift; enabled: !T.rgb-live; }
+        drop-shadow-blur: root.hov ? 22px : 0;
+        drop-shadow-offset-y: root.hov ? 9px : 0;
+        drop-shadow-color: #00000080;
+        transform-scale: ta.pressed ? 0.97 : 1;
+        animate transform-scale { duration: T.press; }
+        @children
+    }
+}
+
+// Echo's window button (minimize / maximize / restore / close)
+export component WinBtn inherits Rectangle {
+    in property <string> kind;
+    callback clicked;
+    width: 46px;
+    height: 52px;
+    background: ta.has-hover ? (root.kind == "close" ? #e81123 : T.text.with-alpha(0.08)) : transparent;
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    Path {
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.kind == "min" ? "M0 5 L10 5" : root.kind == "max" ? "M0.5 0.5 L9.5 0.5 L9.5 9.5 L0.5 9.5 Z" : root.kind == "restore" ? "M2.5 0.5 L9.5 0.5 L9.5 7.5 M0.5 2.5 L7.5 2.5 L7.5 9.5 L0.5 9.5 Z" : "M0 0 L10 10 M10 0 L0 10";
+        stroke: ta.has-hover && root.kind == "close" ? white : T.muted;
+        stroke-width: 1px;
+    }
+}
+
+// Echo's invisible window edge (resizing the frameless window)
+export component Edge inherits TouchArea {
+    in property <string> dir;
+    callback go(string);
+    mouse-cursor: dir == "n" || dir == "s" ? MouseCursor.ns-resize : dir == "e" || dir == "w" ? MouseCursor.ew-resize : dir == "ne" || dir == "sw" ? MouseCursor.nesw-resize : MouseCursor.nwse-resize;
+    pointer-event(e) => {
+        if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+            root.go(root.dir);
+        }
+    }
+}
+
+// ---------- Echo's theme cards (Settings > Appearance) ----------
+export struct ThemeCard {
+    id: string,
+    name: string,
+    on: bool,
+    bg: color,
+    rail: color,
+    panel: color,
+    accent: color,
+    text: color,
+}
+
+export struct ThemeLine {
+    items: [ThemeCard],
+}
+
+// one card: a tiny preview of the window in that theme (Echo's .themegrid card), with Echo's card hover
+export component ThemeTile inherits Rectangle {
+    in property <ThemeCard> c;
+    callback picked(string);
+    horizontal-stretch: 1;
+    max-width: 200px;
+    height: 104px;
+    lt := LiftTile {
+        width: parent.width;
+        height: parent.height;
+        radius: T.r-card;
+        on: root.c.on;
+        fill: T.bg;
+        fill-hover: T.bg;
+        clicked => { root.picked(root.c.id); }
+        Rectangle {
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: 62px;
+            border-radius: 4px;
+            background: root.c.bg;
+            clip: true;
+            // top bar
+            Rectangle {
+                y: 0;
+                height: 9px;
+                background: root.c.rail;
+                Rectangle { x: 4px; y: 2px; width: 5px; height: 5px; border-radius: 1.5px; background: root.c.accent; }
+            }
+            // rail
+            Rectangle {
+                x: 0;
+                y: 9px;
+                width: parent.width * 0.24;
+                height: parent.height - 9px;
+                background: root.c.rail;
+                for i in 3: Rectangle {
+                    x: 5px;
+                    y: 6px + i * 9px;
+                    width: parent.width - 10px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: i == 0 ? root.c.accent : root.c.panel;
+                }
+            }
+            // a card with a slider + switch
+            Rectangle {
+                x: parent.width * 0.24 + 7px;
+                y: 16px;
+                width: parent.width * 0.76 - 14px;
+                height: 38px;
+                border-radius: 4px;
+                background: root.c.panel;
+                Rectangle { x: 6px; y: 9px; width: parent.width * 0.5; height: 4px; border-radius: 2px; background: root.c.text.with-alpha(0.3); }
+                Rectangle { x: 6px; y: 24px; width: parent.width * 0.62; height: 3px; border-radius: 1.5px; background: root.c.text.with-alpha(0.15); }
+                Rectangle { x: 6px; y: 24px; width: parent.width * 0.36; height: 3px; border-radius: 1.5px; background: root.c.accent; }
+                Rectangle { x: parent.width - 20px; y: 7px; width: 14px; height: 8px; border-radius: 4px; background: root.c.accent; }
+            }
+        }
+        Text {
+            x: 10px;
+            y: 76px;
+            text: root.c.name;
+            font-size: 12.5px;
+            font-weight: (root.c.on ? 600 : 500) + T.fw;
+            color: root.c.on || lt.hov ? T.text : T.muted;
+        }
+    }
+}
+
+// ---------- Echo's tooltip + toast (trimmed copies of Echo's TipArea / TipLayer / #notes) ----------
+
+// one tooltip for the whole window; owners set it after a short hover
+export global Tip {
+    in-out property <string> text;
+    in-out property <length> x;       // the owner's centre
+    in-out property <length> bottom;  // the owner's bottom edge
+    in-out property <bool> on;
+    in-out property <int> owner;
+    in-out property <int> next-id: 1;
+}
+
+// put inside anything with a TouchArea: shows `text` under it after 500 ms of hover
+export component TipArea {
+    in property <string> text;
+    in property <bool> hover;
+    property <int> id: 0;
+    init => {
+        self.id = Tip.next-id;
+        Tip.next-id += 1;
+    }
+    Timer {
+        interval: 500ms;
+        running: root.hover && root.text != "" && !(Tip.on && Tip.owner == root.id);
+        triggered => {
+            Tip.text = root.text;
+            Tip.x = root.absolute-position.x + root.width / 2;
+            Tip.bottom = root.absolute-position.y + root.height;
+            Tip.owner = root.id;
+            Tip.on = true;
+        }
+    }
+    changed hover => {
+        if (!self.hover && Tip.owner == self.id) {
+            Tip.on = false;
+        }
+    }
+}
+
+// fills the window, draws the tooltip
+export component TipLayer {
+    if Tip.on: Rectangle {
+        property <length> w: min(tt.preferred-width + 20px, 320px);
+        x: clamp(Tip.x - self.w / 2, 6px, root.width - self.w - 6px);
+        y: Tip.bottom + 8px;
+        width: self.w;
+        height: tt.preferred-height + 12px;
+        background: T.panel2;
+        border-radius: T.r-small;
+        border-width: 1px;
+        border-color: T.hover;
+        drop-shadow-blur: 12px;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-color: #00000080;
+        tt := Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: Tip.text;
+            font-size: 12px;
+            color: T.text;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// a short message at the bottom centre (Echo's toast): set Toast.text, then Toast.seq += 1
+export global Toast {
+    in-out property <string> text;
+    in-out property <int> seq;
+}
+
+export component ToastLayer {
+    property <int> seq: Toast.seq;
+    property <bool> show;
+    property <duration> at;
+    changed seq => {
+        self.at = animation-tick();
+        self.show = true;
+    }
+    Timer {
+        interval: 200ms;
+        running: root.show;
+        triggered => {
+            if (animation-tick() - root.at > 2200ms) {
+                root.show = false;
+            }
+        }
+    }
+    Rectangle {
+        property <length> w: min(tl.preferred-width + 36px, root.width * 0.9);
+        x: (root.width - self.w) / 2;
+        y: root.height - self.height - (root.show ? 24px : 10px);
+        animate y { duration: 200ms; easing: ease-out; }
+        width: self.w;
+        height: 42px;
+        opacity: root.show ? 1 : 0;
+        animate opacity { duration: 180ms; }
+        background: T.panel;
+        border-radius: T.r-card;
+        border-width: 1px;
+        border-color: T.line;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 14px;
+        drop-shadow-color: #000000aa;
+        tl := HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            spacing: 10px;
+            alignment: center;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: #ef6a4c;
+            }
+            Text { text: Toast.text; font-size: 13.5px; color: T.text; vertical-alignment: center; }
+        }
+    }
+}

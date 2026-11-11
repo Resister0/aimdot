@@ -1,0 +1,28 @@
+[package]
+name = "crosshair"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aimdot overlay - the small always-running part"
+
+[[bin]]
+name = "aimdot"
+path = "src/main.rs"
+
+[features]
+# Type-checks the Windows layer on Linux (cargo check --features wincheck)
+wincheck = []
+
+[dependencies]
+crosshair-core = { path = "../core" }
+
+# Windows: no crates at all - direct Win32 calls (raw-dylib)
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+# Global hotkeys via the XDG GlobalShortcuts portal (blocking libdbus binding, like Echo - no tokio / zbus)
+dbus = { version = "0.9", default-features = false }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", default-features = false, features = ["shape", "randr"] }

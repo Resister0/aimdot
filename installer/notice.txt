@@ -1,0 +1,18 @@
+Aimdot - a very light crosshair overlay
+https://sonela.app/aimdot
+
+WHAT IT INSTALLS
+Aimdot installs for you only (no administrator rights) into your user folder (AppData\Local\Aimdot), with a Start menu entry and an uninstaller in Windows Settings > Apps. Your settings and crosshair images live in AppData\Roaming\Aimdot.
+
+PRIVACY
+Aimdot keeps your settings on this PC. The only thing it does by itself is check sonela.app every few hours for a newer version; that check contains Aimdot's version number and your system type (Windows or Linux). No ID and nothing about you.
+
+FAIR PLAY
+Some competitive games and anti-cheat systems don't allow overlays or crosshair tools. Check the game's rules before you use it.
+
+LICENCE
+Aimdot is free, open-source software under the GNU General Public License, version 3 or later (GPL-3.0-or-later). You may use, share and change it under that licence. It comes with NO WARRANTY.
+Source code: https://github.com/Resister0/aimdot
+Full licence text: https://www.gnu.org/licenses/gpl-3.0.html
+
+You can remove Aimdot at any time from Windows Settings > Apps.

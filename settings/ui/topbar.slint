@@ -1,0 +1,294 @@
+// Echo's 52 px title bar (Echo's prototype-native/ui/app.slint, "Chat A"): logo + name, status pill, hotkey chip,
+// buttons, own window buttons. Only looks + clicks here; app.slint feeds it from S.
+import { TipArea } from "theme.slint";
+import { T, Ic, Btn, Switch, Pill, Kbd, IconBtn, WinBtn } from "theme.slint";
+
+export component TopBar inherits Rectangle {
+    in property <bool> custom-frame;
+    in property <bool> drag-on-move;
+    in property <bool> win-max;
+    in property <string> status;        // "On screen", "Hidden", "Overlay not running", …
+    in property <color> status-dot;
+    in property <bool> offline;         // the overlay isn't running: show "Start"
+    in property <bool> on;              // the crosshair switch
+    in property <[string]> hk-keys;     // the show / hide hotkey, one entry per key ([] = not set)
+    in property <bool> hk-listening;
+    in property <bool> hk-bad;          // the hotkey is taken by another app
+    in property <string> hk-none: "No key"; // the chip's text without a key ("No key in KDE")
+    in property <bool> hk-unset;        // no show / hide key at all: the chip is a link to Settings > Hotkeys
+    in property <bool> look-on;         // the Look page is open
+    callback win-act(string);           // "min" / "max" / "close" / "drag"
+    callback toggled(bool);
+    callback start();
+    callback cycle();                   // the pill: Always shown -> Shows while aiming -> Hides while aiming
+    callback hk-start();
+    callback hk-key(string, bool, bool, bool, bool);
+    callback hk-cancel();
+    callback hk-clear();
+    callback set-key();                 // no key yet: the chip is a link to Settings > Hotkeys
+    callback open-look();
+
+    height: 52px;
+    background: T.rail;
+    clip: true;
+    // Echo's glow: soft accent light from the top left, fading out to the right and down
+    Rectangle {
+        background: @linear-gradient(90deg, T.accent.with-alpha(0.15) 0%, T.accent.with-alpha(0.06) 28%, T.accent.with-alpha(0.0) 60%);
+    }
+    Rectangle {
+        background: @linear-gradient(180deg, T.rail.with-alpha(0.0) 0%, T.rail.with-alpha(0.55) 60%, T.rail 100%);
+    }
+    // Aimdot's signature: two thin crosshair lines through the logo, fading out toward their ends
+    Rectangle {
+        x: 30px;
+        y: 26px;
+        width: parent.width * 0.55;
+        height: 1px;
+        background: @linear-gradient(90deg, T.accent.with-alpha(0.18) 0%, T.accent.with-alpha(0.0) 100%);
+    }
+    Rectangle {
+        x: 0;
+        y: 26px;
+        width: 30px;
+        height: 1px;
+        background: @linear-gradient(90deg, T.accent.with-alpha(0.0) 0%, T.accent.with-alpha(0.18) 100%);
+    }
+    Rectangle {
+        x: 30px;
+        y: 0;
+        width: 1px;
+        height: parent.height;
+        background: @linear-gradient(180deg, T.accent.with-alpha(0.0) 0%, T.accent.with-alpha(0.18) 50%, T.accent.with-alpha(0.0) 100%);
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: T.line; }
+    // empty space drags the window, double-click maximizes
+    TouchArea {
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down && root.custom-frame && !root.drag-on-move) {
+                root.win-act("drag");
+            }
+        }
+        moved => {
+            if (self.pressed && root.custom-frame && root.drag-on-move
+                && (abs(self.mouse-x - self.pressed-x) > 4px || abs(self.mouse-y - self.pressed-y) > 4px)) {
+                root.win-act("drag");
+            }
+        }
+        double-clicked => {
+            if (root.custom-frame) {
+                root.win-act("max");
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: root.custom-frame ? 0px : 16px;
+        spacing: 8px;
+        // logo like Echo's: a tile in the theme's gradient with an accent glow, the icon drawn in white on top
+        // (the lock-on arcs + aim dot of assets/icons/aimdot.svg); the taskbar / window icon stays the coral one
+        Rectangle {
+            y: 12px;
+            width: 28px;
+            height: 28px;
+            border-radius: T.r-small + 1px;
+            background: T.grad;
+            drop-shadow-blur: 14px;
+            drop-shadow-offset-y: 4px;
+            drop-shadow-color: T.accent.with-alpha(0.33);
+            Path {
+                width: 28px;
+                height: 28px;
+                viewbox-width: 64;
+                viewbox-height: 64;
+                stroke: white;
+                stroke-width: 3.1px;
+                stroke-line-cap: round;
+                fill: transparent;
+                commands: "M50.54 24.51 A20 20 0 0 0 39.49 13.46 M24.51 13.46 A20 20 0 0 0 13.46 24.51 M13.46 39.49 A20 20 0 0 0 24.51 50.54 M39.49 50.54 A20 20 0 0 0 50.54 39.49";
+            }
+            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: white; }
+        }
+        Text {
+            text: "Aimdot";
+            width: self.preferred-width + 8px;
+            font-size: 17px;
+            font-weight: 700 + T.fw;
+            color: T.text;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 1px;
+            height: 22px;
+            y: 15px;
+            background: T.line;
+        }
+        // overlay status (double-click / click when it's not running = start it)
+        Pill {
+            y: 12px;
+            height: 28px;
+            max-w: 260px;
+            opacity: 0.8;
+            text: root.status;
+            dot: root.status-dot;
+            pta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if (root.offline) {
+                        root.start();
+                    } else {
+                        root.cycle();
+                    }
+                }
+            }
+            TipArea {
+                text: root.offline ? "Click to start the overlay" : "Click to change when the crosshair shows";
+                hover: pta.has-hover;
+            }
+        }
+        // the show / hide hotkey chip: click the keys, then press the new ones (Esc = keep, Backspace = none)
+        hkc := Rectangle {
+            y: 12px;
+            height: 28px;
+            opacity: 0.8;
+            width: chl.preferred-width;
+            border-radius: 14px;
+            background: T.panel;
+            border-width: 1px;
+            border-color: root.hk-listening ? T.accent : root.hk-bad ? T.warn : T.line;
+            chl := HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 6px;
+                Rectangle {
+                    width: chk.preferred-width;
+                    border-radius: 4px;
+                    background: kta.has-hover && !root.hk-listening ? T.panel2 : transparent;
+                    chk := HorizontalLayout {
+                        padding-left: 3px;
+                        padding-right: 3px;
+                        spacing: 4px;
+                        if root.hk-listening: Text {
+                            text: "Press keys…";
+                            font-size: 12.5px;
+                            color: T.accent2;
+                            vertical-alignment: center;
+                        }
+                        if !root.hk-listening && root.hk-keys.length == 0: Text {
+                            text: root.hk-none;
+                            font-size: 12.5px;
+                            color: root.hk-unset ? (kta.has-hover ? T.text : T.accent2) : T.dim;
+                            vertical-alignment: center;
+                        }
+                        if !root.hk-listening: HorizontalLayout {
+                            spacing: 4px;
+                            for k in root.hk-keys: Kbd {
+                                y: 4px;
+                                text: k;
+                            }
+                        }
+                    }
+                    kta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (root.hk-unset) {
+                                root.set-key();
+                            } else if (root.hk-listening) {
+                                root.hk-cancel();
+                            } else {
+                                root.hk-start();
+                                fs.focus();
+                            }
+                        }
+                    }
+                }
+                if !root.hk-unset: Text {
+                    text: "Show / hide";
+                    font-size: 12.5px;
+                    color: T.muted;
+                    vertical-alignment: center;
+                }
+            }
+            fs := FocusScope {
+                width: 0;
+                height: 0;
+                enabled: root.hk-listening;
+                key-pressed(e) => {
+                    if (!root.hk-listening) {
+                        return reject;
+                    }
+                    if (e.text == Key.Escape) {
+                        root.hk-clear();
+                        return accept;
+                    }
+                    root.hk-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+                    accept
+                }
+                focus-changed-event => {
+                    if (!self.has-focus && root.hk-listening) {
+                        root.hk-cancel();
+                    }
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        IconBtn {
+            y: 11px;
+            icon: Ic.palette;
+            on: root.look-on;
+            clicked => { root.open-look(); }
+        }
+        if root.offline: Btn {
+            y: 10px;
+            height: 32px;
+            primary: true;
+            text: "Start overlay";
+            icon: Ic.power;
+            clicked => { root.start(); }
+        }
+        // quick on / off for the crosshair
+        if !root.offline: Rectangle {
+            y: 10px;
+            height: 32px;
+            width: swl.preferred-width;
+            border-radius: T.r-btn;
+            background: T.panel;
+            border-width: 1px;
+            border-color: root.on ? T.accent.with-alpha(0.45) : T.line;
+            swl := HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 6px;
+                spacing: 10px;
+                Text {
+                    text: "Crosshair";
+                    font-size: 13px;
+                    font-weight: 600 + T.fw;
+                    color: root.on ? T.text : T.muted;
+                    vertical-alignment: center;
+                }
+                Switch {
+                    y: (parent.height - self.height) / 2;
+                    on: root.on;
+                    toggled(v) => { root.toggled(v); }
+                }
+            }
+        }
+        if root.custom-frame: Rectangle {
+            width: 1px;
+            height: 22px;
+            y: 15px;
+            background: T.line;
+        }
+        if root.custom-frame: WinBtn {
+            kind: "min";
+            clicked => { root.win-act("min"); }
+        }
+        if root.custom-frame: WinBtn {
+            kind: root.win-max ? "restore" : "max";
+            clicked => { root.win-act("max"); }
+        }
+        if root.custom-frame: WinBtn {
+            kind: "close";
+            clicked => { root.win-act("close"); }
+        }
+    }
+}

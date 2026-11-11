@@ -1,0 +1,772 @@
+// Painter page: paint a crosshair pixel by pixel. Rust side: src/painter.rs (global Paint); the pixels live in
+// crosshair-core's paint.rs. The canvas is drawn in layers: checker, picture (Rust image, one pixel per cell,
+// shown with pixelated scaling), grid lines, centre marker, the brush under the mouse.
+import { T, Icon, Btn, Switch, Slider, Seg, Opt, Card, Row, Note, ColorPick } from "theme.slint";
+import { Field, PTitle, PIc } from "images.slint";
+
+export struct LayerRow {
+    index: int,        // layer number (0 = bottom)
+    name: string,
+    img: image,
+    visible: bool,
+    on: bool,          // the layer you paint on
+    sel: bool,         // ticked for the multi-layer actions
+    opacity: float,
+    tinted: bool,
+    tint: color,
+    effect: int,
+    effect-name: string,
+}
+
+export global Paint {
+    in-out property <int> tab;         // 0 paint, 1 layers, 2 animation, 3 share
+    // layers (top first)
+    in property <[LayerRow]> layers;
+    in property <int> layer-count: 1;
+    in property <int> sel-count: 1;
+    in property <float> sel-opacity: 1;
+    in property <int> sel-effect;
+    in property <bool> sel-tinted;
+    // animation
+    in property <int> frames: 1;
+    in property <float> fps: 8;
+    in property <bool> play;
+    in property <int> view;
+    in property <bool> onion-on;       // the ghost is drawn now
+    in property <bool> onion-wanted;   // the switch
+    in property <image> onion;
+    in property <image> layer;
+    in property <image> checker;
+    in property <int> n: 31;
+    in property <int> tool;            // 0 brush, 1 eraser, 2 fill, 3 line, 4 pick a colour, 5 circle, 6 ring, 7 square, 8 cross
+    in property <int> brush: 1;        // 1, 3, 5 px (also the width of lines and shapes)
+    in property <int> sym;             // 0 off, 1 left/right, 2 up/down, 3 both, 4 4-way turn, 5 8-way
+    in property <int> gap: 2;          // cross tool: gap in the middle
+    in property <int> export-scale: 2;
+    // screenshot import in progress
+    in property <bool> shot;
+    in property <image> shot-img;
+    in property <color> shot-key;
+    in property <float> shot-tol;
+    in property <bool> shot-one;
+    in-out property <string> shot-path-text;
+    in property <string> share-code;   // filled once the share-code format is in (aimdot-profiles)
+    in property <color> color;
+    in property <float> alpha: 1;
+    in property <bool> outline;
+    in property <color> outline-color;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <bool> empty: true;
+    in property <bool> live: true;
+    in property <float> scale: 1;
+    in property <string> size-text;
+    in-out property <string> name;     // the save name (the field edits it)
+    in property <string> from;
+    in property <string> status;
+    in property <bool> status-ok: true;
+    // the open colour picker: "" / "color" / "outline"
+    in property <string> pick-key;
+    in property <float> ph;
+    in property <float> ps;
+    in property <float> pv;
+    in property <string> phex;
+    // view only (no Rust needed)
+    in-out property <bool> grid: true;
+    in-out property <bool> centre: true;
+    callback down(int, int, bool);     // cell x, y, right button
+    callback drag(int, int);
+    callback up();
+    callback set-tool(int);
+    callback set-brush(int);
+    callback set-sym(int);
+    callback set-gap(int);
+    callback set-size(int);
+    callback set-color(color);
+    callback set-alpha(float);
+    callback set-outline(bool);
+    callback set-outline-color(color);
+    callback open-picker(string);
+    callback pick(float, float, float);
+    callback hex(string);
+    callback undo();
+    callback redo();
+    callback clear();
+    callback new-picture();
+    callback set-live(bool);
+    callback set-scale(float);
+    callback save(string);
+    callback shot-browse();
+    callback shot-path(string);
+    callback shot-pick(int, int);      // a pixel of the screenshot's centre: the crosshair colour
+    callback set-shot-tol(float);
+    callback set-shot-one(bool);
+    callback shot-keep();
+    callback shot-cancel();
+    callback set-export-scale(int);
+    callback export-png();
+    callback copy-image();
+    callback copy-discord();
+    callback copy-text(string);
+    callback paste-code(string);
+    callback export-svg();
+    callback export-anim(string);      // "gif" / "apng"
+    callback layer-pick(int);
+    callback layer-tick(int, bool);
+    callback layer-all();
+    callback layer-visible(int, bool);
+    callback layer-rename(int, string);
+    callback layer-add();
+    callback layer-duplicate();
+    callback layer-delete();
+    callback layer-merge();
+    callback layer-move(bool);         // up
+    callback layer-nudge(int, int);
+    callback set-layer-opacity(float);
+    callback set-layer-tint(color);
+    callback clear-layer-tint();
+    callback set-layer-effect(int);
+    callback set-frames(int);
+    callback set-fps(float);
+    callback set-play(bool);
+    callback set-view(int);
+    callback set-onion(bool);
+    in-out property <string> paste-text;
+}
+
+struct Ghost {
+    x: int,
+    y: int,
+    on: bool,
+}
+
+component Canvas inherits Rectangle {
+    in property <length> max-side: 456px;
+    property <length> cell: max(4px, floor(root.max-side / 1px / Paint.n) * 1px);
+    property <int> c: floor(Paint.n / 2);
+    property <bool> dragging;
+    property <int> hx: floor(ta.mouse-x / root.cell);
+    property <int> hy: floor(ta.mouse-y / root.cell);
+    property <int> hs: Paint.tool >= 2 ? 1 : Paint.brush;
+    property <int> dx: root.hx - root.c;
+    property <int> dy: root.hy - root.c;
+    property <bool> mx: Paint.sym == 1 || Paint.sym == 3 || Paint.sym == 5;
+    property <bool> my: Paint.sym == 2 || Paint.sym == 3 || Paint.sym == 5;
+    property <bool> turn: Paint.sym == 4 || Paint.sym == 5;
+    width: root.cell * Paint.n;
+    height: root.cell * Paint.n;
+    background: T.bg;
+    Image { width: parent.width; height: parent.height; source: Paint.checker; image-rendering: pixelated; }
+    if Paint.centre: Rectangle { x: 0; y: root.c * root.cell; width: parent.width; height: root.cell; background: T.accent.with-alpha(0.08); }
+    if Paint.centre: Rectangle { x: root.c * root.cell; y: 0; width: root.cell; height: parent.height; background: T.accent.with-alpha(0.08); }
+    if Paint.onion-on: Image { width: parent.width; height: parent.height; source: Paint.onion; image-rendering: pixelated; opacity: 0.3; }
+    Image { width: parent.width; height: parent.height; source: Paint.layer; image-rendering: pixelated; }
+    if Paint.grid && root.cell >= 6px: Rectangle {
+        for i in Paint.n - 1: Rectangle { x: (i + 1) * root.cell; y: 0; width: 1px; height: parent.height; background: T.text.with-alpha(0.07); }
+        for i in Paint.n - 1: Rectangle { x: 0; y: (i + 1) * root.cell; width: parent.width; height: 1px; background: T.text.with-alpha(0.07); }
+    }
+    if Paint.centre: Rectangle {
+        x: root.c * root.cell;
+        y: root.c * root.cell;
+        width: root.cell;
+        height: root.cell;
+        border-width: 1.5px;
+        border-color: T.accent;
+    }
+    // the brush under the mouse (+ where the mirror paints)
+    if ta.has-hover: Rectangle {
+        x: (root.hx - (root.hs - 1) / 2) * root.cell;
+        y: (root.hy - (root.hs - 1) / 2) * root.cell;
+        width: root.hs * root.cell;
+        height: root.hs * root.cell;
+        border-width: 1px;
+        border-color: T.text.with-alpha(0.8);
+    }
+    // where the symmetry paints too
+    for g in [
+        { x: -root.dx, y: root.dy, on: root.mx },
+        { x: root.dx, y: -root.dy, on: root.my },
+        { x: -root.dx, y: -root.dy, on: Paint.sym == 3 || root.turn },
+        { x: -root.dy, y: root.dx, on: root.turn },
+        { x: root.dy, y: -root.dx, on: root.turn },
+        { x: root.dy, y: root.dx, on: Paint.sym == 5 },
+        { x: -root.dy, y: -root.dx, on: Paint.sym == 5 },
+    ]: Rectangle {
+        visible: ta.has-hover && g.on && Paint.tool != 4;
+        x: (root.c + g.x - (root.hs - 1) / 2) * root.cell;
+        y: (root.c + g.y - (root.hs - 1) / 2) * root.cell;
+        width: root.hs * root.cell;
+        height: root.hs * root.cell;
+        border-width: 1px;
+        border-color: T.text.with-alpha(0.35);
+    }
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.modifiers.control && (e.text == "z" || e.text == "Z")) {
+                if (e.modifiers.shift) { Paint.redo(); } else { Paint.undo(); }
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "y" || e.text == "Y")) {
+                Paint.redo();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "a" || e.text == "A")) {
+                Paint.layer-all();
+                return accept;
+            }
+            if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
+                return reject;
+            }
+            // arrows: move the chosen layers (Shift = 5 px)
+            if (e.text == Key.LeftArrow) { Paint.layer-nudge(e.modifiers.shift ? -5 : -1, 0); return accept; }
+            if (e.text == Key.RightArrow) { Paint.layer-nudge(e.modifiers.shift ? 5 : 1, 0); return accept; }
+            if (e.text == Key.UpArrow) { Paint.layer-nudge(0, e.modifiers.shift ? -5 : -1); return accept; }
+            if (e.text == Key.DownArrow) { Paint.layer-nudge(0, e.modifiers.shift ? 5 : 1); return accept; }
+            if (e.text == " ") { Paint.set-play(!Paint.play); return accept; }
+            if (e.text == "b") { Paint.set-tool(0); return accept; }
+            if (e.text == "e") { Paint.set-tool(1); return accept; }
+            if (e.text == "f") { Paint.set-tool(2); return accept; }
+            if (e.text == "l") { Paint.set-tool(3); return accept; }
+            if (e.text == "i") { Paint.set-tool(4); return accept; }
+            if (e.text == "c") { Paint.set-tool(5); return accept; }
+            if (e.text == "r") { Paint.set-tool(6); return accept; }
+            if (e.text == "s") { Paint.set-tool(7); return accept; }
+            if (e.text == "x") { Paint.set-tool(8); return accept; }
+            if (e.text == "g") { Paint.grid = !Paint.grid; return accept; }
+            if (e.text == "[") { Paint.set-brush(max(1, Paint.brush - 2)); return accept; }
+            if (e.text == "]") { Paint.set-brush(min(5, Paint.brush + 2)); return accept; }
+            reject
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: crosshair;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && !root.dragging && (e.button == PointerEventButton.left || e.button == PointerEventButton.right)) {
+                root.dragging = true;
+                fs.focus();
+                Paint.down(root.hx, root.hy, e.button == PointerEventButton.right);
+            } else if (e.kind == PointerEventKind.up && root.dragging) {
+                root.dragging = false;
+                Paint.up();
+            }
+        }
+        moved => {
+            if (root.dragging) {
+                Paint.drag(root.hx, root.hy);
+            }
+        }
+    }
+}
+
+// swatches + the current colour (click: picker under the row)
+component Swatches inherits VerticalLayout {
+    in property <string> label;
+    in property <string> sub;
+    in property <string> key;          // "color" / "outline"
+    in property <color> value;
+    in property <[color]> colors;
+    callback chosen(color);
+    property <bool> open: Paint.pick-key == root.key;
+    spacing: 8px;
+    Row {
+        label: root.label;
+        sub: root.sub;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: end;
+            for c in root.colors: Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: c;
+                border-width: 1px;
+                border-color: root.value == c ? T.text : T.line;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.chosen(c); }
+                }
+            }
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 44px;
+                height: 26px;
+                border-radius: 8px;
+                background: root.value;
+                border-width: 2px;
+                border-color: root.open ? T.accent : T.hover;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { Paint.open-picker(root.open ? "" : root.key); }
+                }
+            }
+        }
+    }
+    if root.open: ColorPick {
+        h: Paint.ph;
+        s: Paint.ps;
+        v: Paint.pv;
+        cur: root.value;
+        hex: Paint.phex;
+        changed(h, s, v) => { Paint.pick(h, s, v); }
+        hex-entered(t) => { Paint.hex(t); }
+    }
+}
+
+component SwitchRow inherits Row {
+    in property <bool> on;
+    callback toggled(bool);
+    Switch { y: (parent.height - self.height) / 2; on: root.on; toggled(v) => { root.toggled(v); } }
+}
+
+// one line of the layer list: tick, eye, picture, name, effect
+component LayerLine inherits Rectangle {
+    in property <LayerRow> l;
+    height: 46px;
+    border-radius: 9px;
+    background: root.l.on ? T.accent.with-alpha(0.12) : ta.has-hover ? T.panel2 : transparent;
+    border-width: root.l.on ? 1px : 0;
+    border-color: T.accent.with-alpha(0.5);
+    ta := TouchArea { clicked => { Paint.layer-pick(root.l.index); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 10px;
+        // tick (for the multi-layer actions)
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            border-width: 1.5px;
+            border-color: root.l.sel ? T.accent : T.hover;
+            background: root.l.sel ? T.accent : transparent;
+            if root.l.sel: Icon { width: 14px; height: 14px; commands: PIc.tick; stroke: white; stroke-width: 2.2px; }
+            TouchArea { mouse-cursor: pointer; clicked => { Paint.layer-tick(root.l.index, !root.l.sel); } }
+        }
+        // eye
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            Icon { width: 18px; height: 18px; commands: root.l.visible ? PIc.eye : PIc.eye-off; stroke: root.l.visible ? T.text : T.dim; }
+            TouchArea { mouse-cursor: pointer; clicked => { Paint.layer-visible(root.l.index, !root.l.visible); } }
+        }
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 34px;
+            height: 34px;
+            border-radius: 6px;
+            background: T.bg;
+            clip: true;
+            Image { width: parent.width; height: parent.height; source: root.l.img; image-rendering: pixelated; }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.l.name; font-size: 13.5px; color: root.l.visible ? T.text : T.dim; overflow: elide; }
+            Text {
+                text: (root.l.effect != 0 ? root.l.effect-name + "  ·  " : "") + round(root.l.opacity * 100) + " %" + (root.l.tinted ? "  ·  one color" : "");
+                font-size: 11.5px;
+                color: T.muted;
+            }
+        }
+        if root.l.tinted: Rectangle { y: (parent.height - self.height) / 2; width: 14px; height: 14px; border-radius: 7px; background: root.l.tint; border-width: 1px; border-color: T.line; }
+    }
+}
+
+export component PainterPage inherits VerticalLayout {
+    spacing: 14px;
+    PTitle { title: "Painter"; sub: "Paint your own crosshair, pixel by pixel"; }
+    Card {
+        title: "Canvas";
+        HorizontalLayout {
+            padding-top: 4px;
+            padding-bottom: 8px;
+            Seg {
+                opts: [{ label: "Brush", value: 0 }, { label: "Eraser", value: 1 }, { label: "Fill", value: 2 }, { label: "Line", value: 3 }, { label: "Pick color", value: 4 }];
+                value: Paint.tool;
+                picked(v) => { Paint.set-tool(v); }
+            }
+            Rectangle { }
+        }
+        HorizontalLayout {
+            padding-bottom: 8px;
+            spacing: 10px;
+            Seg {
+                opts: [{ label: "Circle", value: 5 }, { label: "Ring", value: 6 }, { label: "Square", value: 7 }, { label: "Cross", value: 8 }];
+                value: Paint.tool;
+                picked(v) => { Paint.set-tool(v); }
+            }
+            if Paint.tool == 8: Text { text: "Gap " + Paint.gap + " px"; font-size: 12.5px; color: T.muted; vertical-alignment: center; }
+            if Paint.tool == 8: Slider {
+                y: (parent.height - self.height) / 2;
+                width: 110px;
+                value: Paint.gap;
+                lo: 0;
+                hi: 12;
+                moved(v) => { Paint.set-gap(v); }
+            }
+            Rectangle { }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Canvas { }
+        }
+        HorizontalLayout {
+            padding-top: 10px;
+            spacing: 8px;
+            alignment: start;
+            Btn { text: "Undo"; icon: PIc.undo; small: true; enabled: Paint.can-undo; clicked => { Paint.undo(); } }
+            Btn { text: "Redo"; icon: PIc.redo; small: true; enabled: Paint.can-redo; clicked => { Paint.redo(); } }
+            Btn { text: "Clear"; icon: PIc.trash; small: true; danger: true; enabled: !Paint.empty; clicked => { Paint.clear(); } }
+        }
+        if Paint.status != "": Note { text: Paint.status; color: Paint.status-ok ? T.ok : T.warn; }
+        Note { text: "Left button paints, right button erases, on the layer you picked. The marked square is the centre pixel - it sits on the screen's centre. Shapes: press where the middle goes, drag out. Keys: B E F L I, C R S X shapes, [ ] size, G grid, arrows move the chosen layers, Ctrl+A all layers, Space plays, Ctrl+Z / Ctrl+Y."; }
+    }
+    // CrosshairX-style tabs under the canvas
+    HorizontalLayout {
+        Seg {
+            opts: [{ label: "Paint", value: 0 }, { label: "Layers (" + Paint.layer-count + ")", value: 1 }, { label: Paint.frames > 1 ? "Animation (" + Paint.frames + ")" : "Animation", value: 2 }, { label: "Export and save", value: 3 }];
+            value: Paint.tab;
+            picked(v) => { Paint.tab = v; }
+        }
+        Rectangle { }
+    }
+    if Paint.tab == 1: Card {
+        title: "Layers";
+        Note { text: "Click a layer to paint on it. Tick layers to change several at once (Ctrl+A ticks all). Top of the list = drawn on top."; }
+        VerticalLayout {
+            padding-top: 6px;
+            spacing: 2px;
+            for l in Paint.layers: LayerLine { l: l; }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 6px;
+            alignment: start;
+            Btn { text: "Add"; icon: PIc.plus; small: true; enabled: Paint.layer-count < 8; clicked => { Paint.layer-add(); } }
+            Btn { text: "Copy"; small: true; enabled: Paint.layer-count + Paint.sel-count <= 8; clicked => { Paint.layer-duplicate(); } }
+            Btn { text: "Merge"; small: true; enabled: Paint.sel-count >= 2; clicked => { Paint.layer-merge(); } }
+            Btn { text: "Delete"; icon: PIc.trash; small: true; danger: true; clicked => { Paint.layer-delete(); } }
+            Btn { text: "Up"; small: true; clicked => { Paint.layer-move(true); } }
+            Btn { text: "Down"; small: true; clicked => { Paint.layer-move(false); } }
+        }
+        Text { text: Paint.sel-count > 1 ? "The " + Paint.sel-count + " ticked layers" : "The ticked layer"; font-size: 13.5px; font-weight: 600 + T.fw; color: T.text; }
+        Row {
+            label: "Opacity";
+            val: round(Paint.sel-opacity * 100) + " %";
+            Slider {
+                y: (parent.height - self.height) / 2;
+                width: 200px;
+                value: Paint.sel-opacity;
+                lo: 0.05;
+                hi: 1;
+                step: 0.05;
+                moved(v) => { Paint.set-layer-opacity(v); }
+            }
+        }
+        Row {
+            label: "One color";
+            sub: "Shows every pixel of the layer in that color.";
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+                for c in [#ffffff, #00ff7f, #00e5ff, #ffe600, #ff9500, #ff2d55, #ff00ff, #000000]: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: c;
+                    border-width: 1px;
+                    border-color: T.line;
+                    TouchArea { mouse-cursor: pointer; clicked => { Paint.set-layer-tint(c); } }
+                }
+                Btn { y: (parent.height - self.height) / 2; text: "Own colors"; small: true; enabled: Paint.sel-tinted; clicked => { Paint.clear-layer-tint(); } }
+            }
+        }
+        Row {
+            label: "Move";
+            sub: "1 px (arrow keys on the canvas; Shift = 5 px).";
+            HorizontalLayout {
+                spacing: 4px;
+                Btn { y: (parent.height - self.height) / 2; text: "←"; small: true; clicked => { Paint.layer-nudge(-1, 0); } }
+                Btn { y: (parent.height - self.height) / 2; text: "↑"; small: true; clicked => { Paint.layer-nudge(0, -1); } }
+                Btn { y: (parent.height - self.height) / 2; text: "↓"; small: true; clicked => { Paint.layer-nudge(0, 1); } }
+                Btn { y: (parent.height - self.height) / 2; text: "→"; small: true; clicked => { Paint.layer-nudge(1, 0); } }
+            }
+        }
+    }
+    if Paint.tab == 2: Card {
+        title: "Animation";
+        Row {
+            label: "Frames";
+            sub: Paint.frames > 1 ? "The picture loops through " + Paint.frames + " frames." : "Still picture.";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Still", value: 1 }, { label: "2", value: 2 }, { label: "4", value: 4 }, { label: "6", value: 6 }, { label: "8", value: 8 }];
+                value: Paint.frames;
+                picked(v) => { Paint.set-frames(v); }
+            }
+        }
+        if Paint.frames > 1: Row {
+            label: "Speed";
+            val: round(Paint.fps) + " frames / s";
+            Slider {
+                y: (parent.height - self.height) / 2;
+                width: 200px;
+                value: Paint.fps;
+                lo: 1;
+                hi: 30;
+                moved(v) => { Paint.set-fps(v); }
+            }
+        }
+        Row {
+            label: "Effect of the ticked layers";
+            sub: Paint.sel-effect == 0 ? "Still: the layer doesn't move." : Paint.sel-effect == 1 ? "Blink: on, then off." : Paint.sel-effect == 2 ? "Pulse: fades out and back in." : Paint.sel-effect == 3 ? "Spin: one turn around the centre." : "Grow: gets bigger and back.";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Still", value: 0 }, { label: "Blink", value: 1 }, { label: "Pulse", value: 2 }, { label: "Spin", value: 3 }, { label: "Grow", value: 4 }];
+                value: Paint.sel-effect;
+                picked(v) => { Paint.set-layer-effect(v); }
+            }
+        }
+        if Paint.frames > 1: SwitchRow { label: "Play on the canvas"; sub: "Space starts / stops it too."; on: Paint.play; toggled(v) => { Paint.set-play(v); } }
+        if Paint.frames > 1 && !Paint.play: Row {
+            label: "Frame";
+            val: (Paint.view + 1) + " of " + Paint.frames;
+            Slider {
+                y: (parent.height - self.height) / 2;
+                width: 200px;
+                value: Paint.view;
+                lo: 0;
+                hi: Paint.frames - 1;
+                moved(v) => { Paint.set-view(v); }
+            }
+        }
+        if Paint.frames > 1 && !Paint.play: SwitchRow { label: "Ghost of the frame before"; sub: "Onion skin: the frame before shows faintly under this one."; on: Paint.onion-wanted; toggled(v) => { Paint.set-onion(v); } }
+        Note { text: "Each layer moves on its own: tick layers in Layers, then pick an effect here. Frame 1 is always the picture as you painted it. Saved to images it plays on screen; GIF / APNG files are under Export and save."; }
+    }
+    if Paint.tab == 0: VerticalLayout {
+        spacing: 14px;
+    Card {
+        title: "Brush and symmetry";
+        Row {
+            label: "Brush size";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "1 px", value: 1 }, { label: "3 px", value: 3 }, { label: "5 px", value: 5 }];
+                value: Paint.brush;
+                picked(v) => { Paint.set-brush(v); }
+            }
+        }
+        Row {
+            label: "Symmetry";
+            sub: Paint.sym == 0 ? "Off - paint where you click." : Paint.sym == 1 ? "Mirror left / right." : Paint.sym == 2 ? "Mirror up / down." : Paint.sym == 3 ? "Both mirrors: 4 copies." : Paint.sym == 4 ? "4-way turn: copies at 90° steps (a pinwheel)." : "8-way: both mirrors and the diagonals.";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Off", value: 0 }, { label: "↔", value: 1 }, { label: "↕", value: 2 }, { label: "4", value: 3 }, { label: "4 turn", value: 4 }, { label: "8", value: 5 }];
+                value: Paint.sym;
+                picked(v) => { Paint.set-sym(v); }
+            }
+        }
+        SwitchRow { label: "Grid lines"; on: Paint.grid; toggled(v) => { Paint.grid = v; } }
+        SwitchRow { label: "Centre marker"; on: Paint.centre; toggled(v) => { Paint.centre = v; } }
+    }
+    Card {
+        title: "Color";
+        Swatches {
+            label: "Paint color";
+            key: "color";
+            value: Paint.color;
+            colors: [#ffffff, #00ff7f, #39ff14, #00e5ff, #3b82f6, #ffe600, #ff9500, #ff2d55, #ff00ff, #000000];
+            chosen(c) => { Paint.set-color(c); }
+        }
+        Row {
+            label: "Paint opacity";
+            val: round(Paint.alpha * 100) + " %";
+            Slider {
+                y: (parent.height - self.height) / 2;
+                width: 210px;
+                value: Paint.alpha;
+                lo: 0.1;
+                hi: 1;
+                step: 0.05;
+                moved(v) => { Paint.set-alpha(v); }
+            }
+        }
+        SwitchRow {
+            label: "Outline";
+            sub: "A 1 px edge around everything you paint, so it shows on any background.";
+            on: Paint.outline;
+            toggled(v) => { Paint.set-outline(v); }
+        }
+        if Paint.outline: Swatches {
+            label: "Outline color";
+            key: "outline";
+            value: Paint.outline-color;
+            colors: [#000000, #ffffff, #3a3a3a];
+            chosen(c) => { Paint.set-outline-color(c); }
+        }
+    }
+    Card {
+        title: "Canvas size";
+        Row {
+            label: "Size";
+            sub: Paint.size-text;
+            HorizontalLayout {
+                spacing: 6px;
+                Seg {
+                    y: (parent.height - self.height) / 2;
+                    opts: [{ label: "15", value: 15 }, { label: "21", value: 21 }, { label: "31", value: 31 }, { label: "41", value: 41 }, { label: "63", value: 63 }];
+                    value: Paint.n;
+                    picked(v) => { Paint.set-size(v); }
+                }
+                Btn { y: (parent.height - self.height) / 2; icon: PIc.minus; small: true; enabled: Paint.n > 9; clicked => { Paint.set-size(Paint.n - 2); } }
+                Btn { y: (parent.height - self.height) / 2; icon: PIc.plus; small: true; enabled: Paint.n < 63; clicked => { Paint.set-size(Paint.n + 2); } }
+            }
+        }
+        Note { text: "Always an odd number of pixels, so there is one centre pixel. Changing the size keeps your picture in the middle."; }
+    }
+    Card {
+        title: "From a screenshot";
+        if !Paint.shot: Note { text: "Take a screenshot in your game, then pick it here: its centre (as big as the canvas) becomes your canvas - the game's own crosshair, ready to change."; }
+        if !Paint.shot: HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            Btn { text: "Pick a screenshot…"; icon: PIc.import; small: true; clicked => { Paint.shot-browse(); } }
+            Field {
+                horizontal-stretch: 1;
+                text <=> Paint.shot-path-text;
+                placeholder: "…or paste its full path";
+                accepted(t) => { Paint.shot-path(t); }
+            }
+        }
+        if Paint.shot: HorizontalLayout {
+            padding-top: 6px;
+            spacing: 14px;
+            // the screenshot's centre: click the crosshair's colour
+            Rectangle {
+                width: 150px;
+                height: 150px;
+                border-radius: 8px;
+                clip: true;
+                background: T.bg;
+                Image { width: parent.width; height: parent.height; source: Paint.shot-img; image-rendering: pixelated; }
+                TouchArea {
+                    mouse-cursor: crosshair;
+                    clicked => { Paint.shot-pick(floor(self.mouse-x / self.width * Paint.n), floor(self.mouse-y / self.height * Paint.n)); }
+                }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                Row {
+                    label: "Crosshair color";
+                    sub: "Click it in the picture.";
+                    Rectangle { y: (parent.height - self.height) / 2; width: 44px; height: 26px; border-radius: 8px; background: Paint.shot-key; border-width: 2px; border-color: T.hover; }
+                }
+                Row {
+                    label: "How close";
+                    val: round(Paint.shot-tol * 100) + " %";
+                    Slider {
+                        y: (parent.height - self.height) / 2;
+                        width: 150px;
+                        value: Paint.shot-tol;
+                        lo: 0;
+                        hi: 0.6;
+                        step: 0.01;
+                        moved(v) => { Paint.set-shot-tol(v); }
+                    }
+                }
+                SwitchRow { label: "All in the paint color"; on: Paint.shot-one; toggled(v) => { Paint.set-shot-one(v); } }
+                HorizontalLayout {
+                    padding-top: 4px;
+                    spacing: 8px;
+                    alignment: start;
+                    Btn { text: "Keep"; primary: true; small: true; clicked => { Paint.shot-keep(); } }
+                    Btn { text: "Cancel"; small: true; clicked => { Paint.shot-cancel(); } }
+                }
+            }
+        }
+    }
+    }
+    if Paint.tab == 3: VerticalLayout {
+        spacing: 14px;
+    Card {
+        title: "Export and share";
+        Row {
+            label: "Picture size";
+            sub: "Pixels stay sharp (each pixel becomes a 2×2 or 4×4 block).";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "1×", value: 1 }, { label: "2×", value: 2 }, { label: "4×", value: 4 }];
+                value: Paint.export-scale;
+                picked(v) => { Paint.set-export-scale(v); }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            alignment: start;
+            Btn { text: "Save PNG…"; icon: PIc.save; small: true; enabled: !Paint.empty; clicked => { Paint.export-png(); } }
+            Btn { text: "SVG…"; small: true; enabled: !Paint.empty; clicked => { Paint.export-svg(); } }
+            if Paint.frames > 1: Btn { text: "GIF…"; small: true; enabled: !Paint.empty; clicked => { Paint.export-anim("gif"); } }
+            if Paint.frames > 1: Btn { text: "APNG…"; small: true; enabled: !Paint.empty; clicked => { Paint.export-anim("apng"); } }
+            Btn { text: "Copy picture"; small: true; enabled: !Paint.empty; clicked => { Paint.copy-image(); } }
+            Btn { text: "Copy for Discord"; small: true; primary: true; enabled: !Paint.empty; clicked => { Paint.copy-discord(); } }
+        }
+        if Paint.share-code != "": HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            Field { horizontal-stretch: 1; text: Paint.share-code; }
+            Btn { text: "Copy code"; small: true; clicked => { Paint.copy-text(Paint.share-code); } }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            Field {
+                horizontal-stretch: 1;
+                text <=> Paint.paste-text;
+                placeholder: "Got a code (AIM1:…)? Paste it here to open the picture";
+                accepted(t) => { Paint.paste-code(t); }
+            }
+            Btn { text: "Open"; small: true; clicked => { Paint.paste-code(Paint.paste-text); } }
+        }
+        Note { text: "\"Copy for Discord\" copies the picture (frame 1 when animated): paste it in a message. SVG and the copies are still pictures; GIF / APNG keep the animation. Dragging the picture out of the window isn't possible (the window toolkit can't start a drag)."; }
+    }
+    Card {
+        title: "Show and save";
+        SwitchRow {
+            label: "Show on screen while painting";
+            sub: "Your crosshair on screen becomes this picture as you paint. Switch off to get the old one back.";
+            on: Paint.live;
+            toggled(v) => { Paint.set-live(v); }
+        }
+        Row {
+            label: "Size on screen";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "1×", value: 1 }, { label: "2×", value: 2 }, { label: "3×", value: 3 }, { label: "4×", value: 4 }];
+                value: Paint.scale;
+                picked(v) => { Paint.set-scale(v); }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            spacing: 8px;
+            Field {
+                horizontal-stretch: 1;
+                y: 1px;
+                text <=> Paint.name;
+                placeholder: "Name";
+                accepted(t) => { Paint.save(t); }
+            }
+            Btn { text: "Save to images"; icon: PIc.save; primary: true; enabled: !Paint.empty; clicked => { Paint.save(Paint.name); } }
+            Btn { text: "New"; icon: PIc.plus; clicked => { Paint.new-picture(); } }
+        }
+        Note {
+            text: Paint.from != "" ? "Editing " + Paint.from + " - saving with the same name replaces it." : Paint.frames > 1 ? "Saved as an animated picture: it plays on screen and shows in Images (where you can make it bigger or smaller)." : "Saved pictures are in Images, where you can also make them bigger or smaller.";
+        }
+    }
+    }
+}

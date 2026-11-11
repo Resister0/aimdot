@@ -1,0 +1,9 @@
+[package]
+name = "crosshair-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aimdot crosshair engine, settings and IPC messages (no platform code, no crates)"
+
+[lib]
+path = "src/lib.rs"

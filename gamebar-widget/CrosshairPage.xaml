@@ -1,0 +1,27 @@
+<Page
+    x:Class="CrosshairWidget.CrosshairPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CrosshairWidget"
+    Background="Transparent">
+
+    <!-- Everything is transparent: when the widget is pinned and Game Bar is closed, only the crosshair shows. -->
+    <Grid x:Name="Root" Background="Transparent">
+        <!-- Only while Game Bar is open: a thin frame so you can see where the widget is, and a hint if something
+             is missing. Hidden when pinned + Game Bar closed. -->
+        <Border x:Name="Outline" BorderThickness="1" BorderBrush="#55FFFFFF" CornerRadius="4" Visibility="Collapsed" IsHitTestVisible="False" />
+        <TextBlock x:Name="Hint"
+                   Margin="10"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   TextAlignment="Center"
+                   TextWrapping="Wrap"
+                   FontSize="12"
+                   Foreground="#DDFFFFFF"
+                   IsHitTestVisible="False"
+                   Visibility="Collapsed" />
+        <Canvas x:Name="Layer" IsHitTestVisible="False">
+            <Image x:Name="Crosshair" Stretch="Fill" Visibility="Collapsed" IsHitTestVisible="False" />
+        </Canvas>
+    </Grid>
+</Page>

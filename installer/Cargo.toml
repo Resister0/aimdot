@@ -1,0 +1,14 @@
+# NOT built. Tauri's NSIS bundler (used only to pack Aimdot-Setup.exe, like Echo's installer - ci/public-build.yml, step "Installer")
+# needs a Cargo manifest next to tauri.conf.json. Its own [workspace], so the main workspace never sees it.
+[package]
+name = "aimdot-installer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "aimdot"
+path = "dummy.rs"
+
+[workspace]

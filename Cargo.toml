@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["core", "overlay", "settings"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Resister0"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The settings window is big anyway (Slint); build it a bit faster
+[profile.release.package.crosshair-settings]
+codegen-units = 16

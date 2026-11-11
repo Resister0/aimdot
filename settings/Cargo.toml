@@ -1,0 +1,52 @@
+[package]
+name = "crosshair-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aimdot settings window (Slint) - started only while you change settings"
+
+[[bin]]
+name = "aimdot-settings"
+path = "src/main.rs"
+
+[dependencies]
+crosshair-core = { path = "../core" }
+# Same Slint setup as Echo: winit backend + OpenGL (femtovg) renderer, no Qt, no accessibility layer
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-winit-030"] }
+
+# Images page: JPG / BMP / GIF import (converted to PNG) and PNG writing. Slint already brings image + png + jpeg;
+# gif + bmp are the only new decoders.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+# Painter: copy the picture / share code to the clipboard. Slint already uses arboard (text + Wayland); only
+# "image-data" is new.
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
+# Painter: animated PNG export (already in the build through image / Slint).
+png = "0.18"
+# Images page: SVG import, turned into a PNG here (the overlay stays PNG-only). Slint already links resvg 0.48
+# (with these features) for its own SVG icons, so this adds no new crate.
+resvg = { version = "0.48", default-features = false }
+
+# Auto-update (src/update.rs): the same HTTPS + signature crates as Echo's native app - reqwest blocking + rustls/ring,
+# minisign check of the download with Aimdot's own updater key. Only in the settings program: the overlay stays crate-free.
+minisign-verify = "0.2"
+base64 = "0.22"
+
+# The HTTPS part (ring needs a C compiler): every real build, but not the windows-gnu type check from Linux
+# (CLAUDE.md "Windows check" - no mingw gcc there; real Windows builds are MSVC). update.rs has a stub for it.
+[target.'cfg(not(all(windows, target_env = "gnu")))'.dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+# Profiles page, Linux: the programs with an X11 / XWayland window (the ones the per-game switch can see).
+# Already in the build through winit - no new crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false }
+# Images page, Linux Wayland: drag and drop of files (winit 0.30 has none there) - see src/wl_dnd.rs. Both are
+# already in the build through winit, same features.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+
+[build-dependencies]
+slint-build = "1.18"
+# Windows only, build time only: the icon + version details in aimdot-settings.exe (like Echo)
+winresource = { version = "0.1", default-features = false }
