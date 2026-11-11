@@ -187,7 +187,9 @@ fn write_atomic(p: &Path, bytes: &[u8]) -> std::io::Result<()> {
     })
 }
 
-#[cfg(test)]
+// Linux-only feature: on Windows ensure_at() skips by design, so these tests can't pass there (they stopped the
+// first Windows CI build, 11 Nov 2026).
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

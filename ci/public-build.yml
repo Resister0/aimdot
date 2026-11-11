@@ -197,10 +197,11 @@ jobs:
         run: |
           APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           sudo apt-get $APT update
-          # the overlay needs nothing but libc (Wayland + X11 in pure Rust); the Slint settings window links
-          # fontconfig/freetype and loads xkbcommon (+ xkbcommon-x11 on X11) at run time
+          # the Slint settings window links fontconfig/freetype and loads xkbcommon (+ xkbcommon-x11 on X11) at run
+          # time; libdbus-1-dev: the libdbus-sys crate (Linux tray / KDE hotkeys portal) builds against it - without
+          # it the first public build stopped (11 Nov 2026). libdbus-1.so.3 itself is on every desktop.
           sudo apt-get $APT install -y pkg-config libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libfuse2 file patchelf zsync
+            libdbus-1-dev libfuse2 file patchelf zsync
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
