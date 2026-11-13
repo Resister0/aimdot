@@ -15,6 +15,8 @@ export global T {
     // Aimdot's own coral (theme "", src/theme.rs); Rust puts the picked theme in here
     in-out property <color> accent: #ef6a4c;
     in-out property <color> accent2: #f49782;
+    // text / icons ON the accent or grad (Echo, 11 Nov 2026): near-black on very light accents (Mono, Sand, Lime...)
+    in-out property <color> on-accent: #ffffff;
     out property <color> ok: #34d399;
     out property <color> bad: #fb5c7c;
     out property <color> warn: #f0a93a;
@@ -131,14 +133,14 @@ export component Btn inherits Rectangle {
             width: 16px;
             height: 16px;
             commands: root.icon;
-            stroke: root.primary ? white : root.fg;
+            stroke: root.primary ? T.on-accent : root.fg;
         }
         if root.text != "": Text {
             text: root.text;
             vertical-alignment: center;
             font-size: root.small ? 13px : 14px;
             font-weight: (root.primary ? 600 : 500) + T.fw;
-            color: root.primary ? white : root.fg;
+            color: root.primary ? T.on-accent : root.fg;
         }
     }
 }
@@ -159,7 +161,7 @@ export component Switch inherits Rectangle {
         width: 18px;
         height: 18px;
         border-radius: 9px;
-        background: white;
+        background: root.on ? T.on-accent : white;
         animate x { duration: 150ms; easing: ease-out; }
     }
     TouchArea {
@@ -723,16 +725,10 @@ export struct ThemeCard {
     text: color,
 }
 
-export struct ThemeLine {
-    items: [ThemeCard],
-}
-
 // one card: a tiny preview of the window in that theme (Echo's .themegrid card), with Echo's card hover
 export component ThemeTile inherits Rectangle {
     in property <ThemeCard> c;
     callback picked(string);
-    horizontal-stretch: 1;
-    max-width: 200px;
     height: 104px;
     lt := LiftTile {
         width: parent.width;
@@ -795,6 +791,28 @@ export component ThemeTile inherits Rectangle {
             font-weight: (root.c.on ? 600 : 500) + T.fw;
             color: root.c.on || lt.hov ? T.text : T.muted;
         }
+    }
+}
+
+// all theme cards (13 Nov 2026, Echo's "idea 1"), filled left to right: the most cards per row that fit at 195 px or
+// wider, rounded down to 3, 4, 6, 8 or 12 - the 24 themes then always make full rows. The cards widen to fill the row
+// (about 195-290 px), so a wider window gets more columns, not much bigger cards. Same rule in Echo.
+export component ThemeGrid inherits Rectangle {
+    in property <[ThemeCard]> cards;
+    callback picked(string);
+    property <length> gap: 12px;
+    property <length> tile-h: 104px;
+    property <int> fit: max(1, floor((root.width + root.gap) / (195px + root.gap)));
+    property <int> cols: root.fit >= 12 ? 12 : root.fit >= 8 ? 8 : root.fit >= 6 ? 6 : root.fit >= 4 ? 4 : root.fit;
+    property <length> tile-w: (root.width - (root.cols - 1) * root.gap) / root.cols;
+    height: ceil(root.cards.length / root.cols) * (root.tile-h + root.gap) - root.gap;
+    for c[i] in root.cards: ThemeTile {
+        x: mod(i, root.cols) * (root.tile-w + root.gap);
+        y: floor(i / root.cols) * (root.tile-h + root.gap);
+        width: root.tile-w;
+        height: root.tile-h;
+        c: c;
+        picked(id) => { root.picked(id); }
     }
 }
 

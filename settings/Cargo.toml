@@ -46,6 +46,11 @@ x11rb = { version = "0.13", default-features = false }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 
+# examples/theme_shots.rs only (off-screen pictures of the window): Slint's software renderer. Dev-dependency, so the
+# real program is built without it.
+[dev-dependencies]
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+
 [build-dependencies]
 slint-build = "1.18"
 # Windows only, build time only: the icon + version details in aimdot-settings.exe (like Echo)

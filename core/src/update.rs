@@ -172,8 +172,14 @@ pub fn tray_label() -> Option<String> {
 }
 
 /// Overlay: start `aimdot-settings --check-update` in the background when a check is due (it writes update.ini
-/// and exits; nothing waits for it). Cheap to call often (reads one small file).
+/// and exits). Cheap to call often (reads one small file).
 pub fn spawn_check_if_due() {
+    spawn_check_if_due_then(|| {});
+}
+
+/// `spawn_check_if_due`, and `done` runs once that check has exited (the Linux tray re-reads `tray_label` then).
+/// Not due / couldn't start = `done` never runs.
+pub fn spawn_check_if_due_then(done: impl FnOnce() + Send + 'static) {
     if !due(CHECK_EVERY_SECS) {
         return;
     }
@@ -181,12 +187,27 @@ pub fn spawn_check_if_due() {
     let mut s = read();
     s.checked = now();
     let _ = write(&s);
-    let _ = std::process::Command::new(crate::paths::sibling_exe(crate::SETTINGS_EXE)).arg("--check-update").spawn();
+    spawn_settings("--check-update", done);
 }
 
 /// Overlay tray click: open the settings window and install the known update there.
 pub fn spawn_install() {
-    let _ = std::process::Command::new(crate::paths::sibling_exe(crate::SETTINGS_EXE)).arg("--update").spawn();
+    spawn_settings("--update", || {});
+}
+
+/// Starts `aimdot-settings <arg>` and waits for it on a small thread, so a finished one doesn't stay behind as a
+/// zombie ("<defunct>") under the overlay on Linux (13 Nov 2026); then runs `done`.
+fn spawn_settings(arg: &str, done: impl FnOnce() + Send + 'static) {
+    let Ok(mut child) = std::process::Command::new(crate::paths::sibling_exe(crate::SETTINGS_EXE)).arg(arg).spawn() else {
+        return;
+    };
+    let reaper = std::thread::Builder::new().name("update-wait".into()).stack_size(64 * 1024).spawn(move || {
+        let _ = child.wait();
+        done();
+    });
+    if let Err(e) = reaper {
+        crate::log::line("update", &format!("can't wait for aimdot-settings {arg}: {e}"));
+    }
 }
 
 /// The string value of `"key": "..."` in a flat JSON object (the server's answer; no JSON crate in core).

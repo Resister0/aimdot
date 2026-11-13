@@ -189,8 +189,8 @@ pub fn run(tray: bool, autostart: bool) {
     let mut ctl = Ctl::new(None);
     ctl.platform = disp.name().into();
     crosshair_core::log::start("overlay", &format!("{} - overlay window: {}", crosshair_core::log::os_guess(), disp.name()));
-    // Auto-update check (release builds only, every 4 h at most; a short-lived `aimdot-settings --check-update`).
-    crosshair_core::update::spawn_check_if_due();
+    // Auto-update check (release builds only, every 4 h at most; a short-lived `aimdot-settings --check-update`):
+    // the tray thread starts it now and every 10 min looks whether one is due again (tray.rs).
     if ctl.aim_needed() {
         ctl.aim_status = aim_start(&ctl, &send).into();
     }

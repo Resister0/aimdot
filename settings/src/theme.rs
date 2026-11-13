@@ -1,7 +1,7 @@
 //! Echo's themes for the settings window (copied from Echo's prototype-native/src/settings.rs: THEMES,
 //! themeVars, theme cards). Aimdot's own look - coral #ef6a4c - is the default (id ""); Echo's violet is "violet".
 //! Saved in config.ini [app] as ui_theme / ui_accent / ui_bg (only this window reads them).
-use crate::{AppWindow, ThemeCard, ThemeLine, T};
+use crate::{AppWindow, ThemeCard, T};
 use slint::{Color, ComponentHandle, ModelRc, VecModel};
 
 pub struct Palette {
@@ -16,13 +16,14 @@ pub struct Palette {
     pub dim: Color,
     pub accent: Color,
     pub accent2: Color,
+    pub on_accent: Color,
     pub grad: [Color; 3],
     pub accent_hex: String,
     pub bg_hex: String,
 }
 
 /// (id, name, accent, accent2, gradient, background) - Echo's list, Aimdot's coral first and in Light
-const THEMES: [(&str, &str, &str, &str, [&str; 3], &str); 20] = [
+const THEMES: [(&str, &str, &str, &str, [&str; 3], &str); 23] = [
     ("", "Coral", "#ef6a4c", "#f49782", ["#ff8f6b", "#ef6a4c", "#e0485e"], "#0d0d10"),
     ("violet", "Violet", "#7c5cff", "#9d85ff", ["#8b6cff", "#6a4cf5", "#4f7bff"], "#0d0d10"),
     ("ocean", "Ocean", "#2fa8e0", "#7cc9f0", ["#4cc3f0", "#2f8fe0", "#3b5cf0"], "#0b0e12"),
@@ -35,6 +36,11 @@ const THEMES: [(&str, &str, &str, &str, [&str; 3], &str); 20] = [
     ("lime", "Lime", "#8fcf3c", "#b8e57e", ["#c5ef8a", "#8fcf3c", "#2fae6f"], "#0c0f0a"),
     ("gold", "Gold", "#e0a93a", "#f0cb7a", ["#f5d68a", "#e0a93a", "#c06a2a"], "#100e0a"),
     ("midnight", "Midnight", "#6a6ff0", "#a3a6fa", ["#a3a6fa", "#6a6ff0", "#3a3fb8"], "#08080f"),
+    // 13 Nov 2026: three more everyday themes (the same set as Echo). Text on the accent (on_colour): Plum white
+    // (4.2:1), Mono near-black on the light grey (15:1, all greys), Sand near-black (9.8:1)
+    ("plum", "Plum", "#c13fd6", "#dc8ae9", ["#d77ae6", "#c13fd6", "#7f2fc0"], "#140d16"),
+    ("mono", "Mono", "#e4e4e7", "#f4f4f5", ["#ffffff", "#e4e4e7", "#a1a1aa"], "#0b0b0c"),
+    ("sand", "Sand", "#d2b48c", "#e6d2b4", ["#ecdcc0", "#d2b48c", "#a0805a"], "#14120e"),
     ("christmas", "Christmas", "#e0484a", "#f08a8a", ["#f08a8a", "#e0484a", "#2f9e5a"], "#0a100c"),
     ("autumn", "Autumn", "#e07a2a", "#f0a868", ["#f5c27a", "#e07a2a", "#a8402a"], "#110d09"),
     ("halloween", "Halloween", "#f08a1a", "#ffb15a", ["#ffb15a", "#f08a1a", "#8a3ae0"], "#0e0a12"),
@@ -64,6 +70,31 @@ fn lum(h: &str) -> f32 {
     let (r, g, b) = parse_hex(h).unwrap_or((0.0, 0.0, 0.0));
     (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
 }
+/// WCAG relative luminance (0 = black, 1 = white)
+fn rel_lum(h: &str) -> f32 {
+    let (r, g, b) = parse_hex(h).unwrap_or((0.0, 0.0, 0.0));
+    let lin = |c: f32| {
+        let c = c / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/// Echo's on_colour(): the text colour for something filled with `fill` - white, unless white on it is below 2.3:1
+/// (WCAG contrast), then near-black. Only the really light accents switch (Mono, Sand, Lime, Winter, Gold, Frost,
+/// a white or yellow custom accent); Ocean / Ember / Rosé... keep white, which reads fine.
+fn on_colour(fill: &str) -> &'static str {
+    if 1.05 / (rel_lum(fill) + 0.05) < 2.3 {
+        "#0d0d10"
+    } else {
+        "#ffffff"
+    }
+}
+
 fn col(h: &str) -> Color {
     let (r, g, b) = parse_hex(h).unwrap_or((0.0, 0.0, 0.0));
     Color::from_rgb_u8(r as u8, g as u8, b as u8)
@@ -109,6 +140,7 @@ pub fn palette(id: &str, accent: &str, bg: &str) -> Palette {
         dim: col(dim),
         accent: col(&a),
         accent2: col(&a2),
+        on_accent: col(on_colour(&a)),
         grad: [col(&g[0]), col(&g[1]), col(&g[2])],
         accent_hex: a,
         bg_hex: b,
@@ -129,13 +161,14 @@ pub fn apply(ui: &AppWindow, p: &Palette) {
     t.set_dim(p.dim);
     t.set_accent(p.accent);
     t.set_accent2(p.accent2);
+    t.set_on_accent(p.on_accent);
     t.set_g0(p.grad[0]);
     t.set_g1(p.grad[1]);
     t.set_g2(p.grad[2]);
 }
 
-/// The theme cards, 4 per line (Echo's .themegrid)
-pub fn lines(cur: &str, accent: &str, bg: &str) -> ModelRc<ThemeLine> {
+/// The theme cards (Echo's .themegrid). The window lays them out, as many per row as fit (ui/app.slint ThemeGrid).
+pub fn cards(cur: &str, accent: &str, bg: &str) -> ModelRc<ThemeCard> {
     let mut all: Vec<(&str, &str)> = THEMES.iter().map(|t| (t.0, t.1)).collect();
     all.push(("custom", "Custom"));
     let cards: Vec<ThemeCard> = all
@@ -145,8 +178,7 @@ pub fn lines(cur: &str, accent: &str, bg: &str) -> ModelRc<ThemeLine> {
             ThemeCard { id: (*id).into(), name: (*name).into(), on: *id == cur, bg: p.bg, rail: p.rail, panel: p.panel, accent: p.accent, text: p.text }
         })
         .collect();
-    let lines: Vec<ThemeLine> = cards.chunks(4).map(|c| ThemeLine { items: ModelRc::new(VecModel::from(c.to_vec())) }).collect();
-    ModelRc::new(VecModel::from(lines))
+    ModelRc::new(VecModel::from(cards))
 }
 
 /// Is a theme id one of ours? (an unknown id from a newer version falls back to the default)
@@ -234,5 +266,27 @@ mod tests {
         let l = super::palette("custom", "#3b82f6", "#f6f2ea");
         assert_eq!(l.bg_hex, "#f6f2ea"); // a light background stays light
         assert!(super::known("ocean") && super::known("") && super::known("custom") && !super::known("nope"));
+    }
+
+    #[test]
+    fn new_themes_and_readable_text_on_the_accent() {
+        use super::{on_colour, rel_lum, THEMES};
+        // Coral + 23, with Custom 24 cards (full rows at 3 / 4 / 6 / 8 per row)
+        assert_eq!(THEMES.len() + 1, 24);
+        let contrast = |a: &str, b: &str| {
+            let (x, y) = (rel_lum(a), rel_lum(b));
+            (x.max(y) + 0.05) / (x.min(y) + 0.05)
+        };
+        for id in ["plum", "mono", "sand"] {
+            let p = super::palette(id, "", "");
+            assert!(super::known(id));
+            assert!(contrast(on_colour(&p.accent_hex), &p.accent_hex) >= 4.0, "{id}: text on the accent");
+            assert!(contrast(&p.accent_hex, &p.bg_hex) >= 4.5, "{id}: accent on the background");
+            assert!(rel_lum(&p.bg_hex) < 0.02, "{id}: dark background");
+        }
+        assert_eq!(on_colour("#e4e4e7"), "#0d0d10");
+        assert_eq!(on_colour("#d2b48c"), "#0d0d10");
+        assert_eq!(on_colour("#c13fd6"), "#ffffff");
+        assert_eq!(on_colour("#ef6a4c"), "#ffffff"); // Coral keeps white
     }
 }

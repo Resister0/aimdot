@@ -7,6 +7,10 @@
 //!
 //! The panel restarting (plasmashell crash, panel added later) is handled by watching the watcher's name:
 //! when org.kde.StatusNotifierWatcher gets a new owner, the item registers again.
+//!
+//! Updates (release builds, like the Windows tray): this thread also wakes every 10 min to start the 4-hourly
+//! `aimdot-settings --check-update` (core/update.rs), and shows "Update to Aimdot X" on top of the menu once one is
+//! known (13 Nov 2026 - before, Linux only checked when the overlay started and only the settings window offered it).
 
 use crate::ctl::Ev;
 use crate::ipc_server::Send;
@@ -19,8 +23,8 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const SNI: &str = "org.kde.StatusNotifierItem";
@@ -36,6 +40,15 @@ const ID_SHOW: i32 = 1;
 const ID_OPEN: i32 = 2;
 const ID_SEP: i32 = 3;
 const ID_QUIT: i32 = 4;
+const ID_UPDATE: i32 = 5;
+const ID_SEP_UPDATE: i32 = 6;
+
+/// How often the thread wakes to see whether an update check is due (the check itself runs every 4 h; Windows'
+/// housekeeping looks every 10 min too).
+const UPDATE_LOOK: Duration = Duration::from_secs(600);
+
+/// "Update to Aimdot X" while an update is known (core::update::tray_label), else None.
+type UpdLabel = Arc<Mutex<Option<String>>>;
 
 pub struct Tray {
     on: Arc<AtomicBool>,
@@ -50,8 +63,9 @@ impl Tray {
         let _ = wake_r.set_nonblocking(true);
         let _ = wake.set_nonblocking(true);
         let on2 = on.clone();
+        let waker = wake.try_clone().ok();
         let _ = std::thread::Builder::new().name("tray".into()).stack_size(256 * 1024).spawn(move || {
-            if let Err(e) = run(send, on2, wake_r) {
+            if let Err(e) = run(send, on2, wake_r, waker) {
                 eprintln!("aimdot: tray: {e}");
             }
         });
@@ -118,7 +132,7 @@ fn menu_props() -> PropMap {
 }
 
 /// The properties of one menu item.
-fn item(id: i32, on: bool) -> PropMap {
+fn item(id: i32, on: bool, upd: &Option<String>) -> PropMap {
     let mut m = PropMap::new();
     match id {
         0 => {
@@ -138,6 +152,14 @@ fn item(id: i32, on: bool) -> PropMap {
         ID_QUIT => {
             m.insert("label".into(), var("Quit".to_string()));
         }
+        ID_UPDATE => {
+            m.insert("label".into(), var(upd.clone().unwrap_or_default()));
+            m.insert("visible".into(), var(upd.is_some()));
+        }
+        ID_SEP_UPDATE => {
+            m.insert("type".into(), var("separator".to_string()));
+            m.insert("visible".into(), var(upd.is_some()));
+        }
         _ => {}
     }
     m
@@ -145,13 +167,20 @@ fn item(id: i32, on: bool) -> PropMap {
 
 type Layout = (i32, PropMap, Vec<Var>);
 
-fn layout(parent: i32, on: bool) -> Layout {
+/// The menu's items, top to bottom ("Update to Aimdot X" + a separator on top while an update is known).
+fn ids(upd: &Option<String>) -> Vec<i32> {
+    let mut v = if upd.is_some() { vec![ID_UPDATE, ID_SEP_UPDATE] } else { Vec::new() };
+    v.extend([ID_SHOW, ID_OPEN, ID_SEP, ID_QUIT]);
+    v
+}
+
+fn layout(parent: i32, on: bool, upd: &Option<String>) -> Layout {
     let kids = if parent == 0 {
-        [ID_SHOW, ID_OPEN, ID_SEP, ID_QUIT].iter().map(|&id| var((id, item(id, on), Vec::<Var>::new()))).collect()
+        ids(upd).into_iter().map(|id| var((id, item(id, on, upd), Vec::<Var>::new()))).collect()
     } else {
         Vec::new()
     };
-    (parent, item(parent, on), kids)
+    (parent, item(parent, on, upd), kids)
 }
 
 /// Asks the panel to show the item (again). Not waited for: a watcher that calls back into us before
@@ -167,6 +196,9 @@ fn clicked(send: &Send, id: i32) {
         ID_SHOW => send(Ev::ToggleOverlay),
         ID_OPEN => send(Ev::OpenSettings),
         ID_QUIT => send(Ev::Quit),
+        // Opens the settings window, which downloads + checks + installs; the AppImage update quits and restarts
+        // this overlay itself (settings/src/update.rs).
+        ID_UPDATE => crosshair_core::update::spawn_install(),
         _ => {}
     }
 }
@@ -188,7 +220,8 @@ const INTROSPECT: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Obj
 </node>"#;
 
 /// Answers one method call. None = not ours (an error reply goes back).
-fn answer(msg: &Message, send: &Send, on: &AtomicBool, rev: u32, icons: &Pixmaps) -> Option<Message> {
+fn answer(msg: &Message, send: &Send, on: &AtomicBool, upd: &UpdLabel, rev: u32, icons: &Pixmaps) -> Option<Message> {
+    let upd = upd.lock().map(|u| u.clone()).unwrap_or_default();
     let path = msg.path()?.to_string();
     let iface = msg.interface().map(|i| i.to_string()).unwrap_or_default();
     let member = msg.member()?.to_string();
@@ -218,17 +251,17 @@ fn answer(msg: &Message, send: &Send, on: &AtomicBool, rev: u32, icons: &Pixmaps
         (SNI, "SecondaryActivate" | "ContextMenu" | "Scroll") => r,
         (MENU, "GetLayout") => {
             let parent = msg.read1::<i32>().unwrap_or(0);
-            r.append2(rev, layout(parent, is_on))
+            r.append2(rev, layout(parent, is_on, &upd))
         }
         (MENU, "GetGroupProperties") => {
             let ids = msg.read1::<Vec<i32>>().unwrap_or_default();
-            let ids = if ids.is_empty() { vec![0, ID_SHOW, ID_OPEN, ID_SEP, ID_QUIT] } else { ids };
-            let v: Vec<(i32, PropMap)> = ids.into_iter().map(|id| (id, item(id, is_on))).collect();
+            let ids = if ids.is_empty() { [vec![0], self::ids(&upd)].concat() } else { ids };
+            let v: Vec<(i32, PropMap)> = ids.into_iter().map(|id| (id, item(id, is_on, &upd))).collect();
             r.append1(v)
         }
         (MENU, "GetProperty") => {
             let (id, name) = msg.read2::<i32, String>().ok()?;
-            r.append1(item(id, is_on).remove(&name)?)
+            r.append1(item(id, is_on, &upd).remove(&name)?)
         }
         (MENU, "Event") => {
             let (id, kind) = msg.read2::<i32, String>().ok()?;
@@ -252,13 +285,15 @@ fn answer(msg: &Message, send: &Send, on: &AtomicBool, rev: u32, icons: &Pixmaps
     })
 }
 
-fn wait(fds: &[i32]) -> bool {
+/// Sleeps until a fd is readable or `timeout` passed. false = the D-Bus connection (fds[0]) is gone.
+fn wait(fds: &[i32], timeout: Duration) -> bool {
     let mut p: Vec<libc::pollfd> = fds.iter().map(|&fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 }).collect();
-    unsafe { libc::poll(p.as_mut_ptr(), p.len() as libc::nfds_t, -1) };
+    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    unsafe { libc::poll(p.as_mut_ptr(), p.len() as libc::nfds_t, ms) };
     p[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) == 0
 }
 
-fn run(send: Send, on: Arc<AtomicBool>, wake_r: UnixStream) -> Result<(), String> {
+fn run(send: Send, on: Arc<AtomicBool>, wake_r: UnixStream, waker: Option<UnixStream>) -> Result<(), String> {
     let mut ch = dbus::channel::Channel::get_private(dbus::channel::BusType::Session).map_err(|e| format!("no D-Bus session: {e}"))?;
     ch.set_watch_enabled(true);
     let conn = Connection::from(ch);
@@ -267,13 +302,14 @@ fn run(send: Send, on: Arc<AtomicBool>, wake_r: UnixStream) -> Result<(), String
 
     let icons = pixmaps();
     let rev = Arc::new(std::sync::atomic::AtomicU32::new(1));
+    let upd: UpdLabel = Arc::new(Mutex::new(crosshair_core::update::tray_label()));
     {
-        let (send, on, rev) = (send.clone(), on.clone(), rev.clone());
+        let (send, on, upd, rev) = (send.clone(), on.clone(), upd.clone(), rev.clone());
         conn.start_receive(
             MatchRule::new_method_call(),
             Box::new(move |msg: Message, c: &Connection| {
                 if msg.msg_type() == MessageType::MethodCall {
-                    let reply = answer(&msg, &send, &on, rev.load(Ordering::Relaxed), &icons).unwrap_or_else(|| {
+                    let reply = answer(&msg, &send, &on, &upd, rev.load(Ordering::Relaxed), &icons).unwrap_or_else(|| {
                         let e = dbus::strings::ErrorName::from("org.freedesktop.DBus.Error.UnknownMethod");
                         msg.error(&e, &std::ffi::CString::new("not supported").unwrap())
                     });
@@ -301,18 +337,41 @@ fn run(send: Send, on: Arc<AtomicBool>, wake_r: UnixStream) -> Result<(), String
     eprintln!("aimdot: tray: icon offered to the panel");
 
     let mut shown = on.load(Ordering::Relaxed);
+    let mut looked: Option<Instant> = None;
     loop {
         while conn.process(Duration::ZERO).map_err(|e| e.to_string())? {}
-        if !wait(&[conn.channel().watch().fd, wake_r.as_raw_fd()]) {
+        // Update check due? (release builds, every 4 h; reads one small file). When it has exited, the waker
+        // wakes this loop so the menu shows its result right away.
+        if looked.map_or(true, |t| t.elapsed() >= UPDATE_LOOK) {
+            looked = Some(Instant::now());
+            let w = waker.as_ref().and_then(|w| w.try_clone().ok());
+            crosshair_core::update::spawn_check_if_due_then(move || {
+                if let Some(w) = w {
+                    let _ = (&w).write(&[2]);
+                }
+            });
+        }
+        let left = UPDATE_LOOK.saturating_sub(looked.map_or(Duration::ZERO, |t| t.elapsed()));
+        if !wait(&[conn.channel().watch().fd, wake_r.as_raw_fd()], left.max(Duration::from_secs(1))) {
             return Err("D-Bus connection lost".into());
         }
         let mut b = [0u8; 64];
         while (&wake_r).read(&mut b).map_or(false, |n| n > 0) {}
+        // An update became known (or was installed / is gone): the menu gets / loses its first item.
+        let label = crosshair_core::update::tray_label();
+        let label_changed = upd.lock().map(|mut u| if *u != label { *u = label; true } else { false }).unwrap_or(false);
+        if label_changed {
+            let r = rev.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Ok(s) = Message::new_signal(MENU_PATH, MENU, "LayoutUpdated") {
+                let _ = conn.send(s.append2(r, 0i32));
+            }
+        }
         let now = on.load(Ordering::Relaxed);
         if now != shown {
             shown = now;
             let r = rev.fetch_add(1, Ordering::Relaxed) + 1;
-            let changed: Vec<(i32, PropMap)> = vec![(ID_SHOW, item(ID_SHOW, now))];
+            let u = upd.lock().map(|u| u.clone()).unwrap_or_default();
+            let changed: Vec<(i32, PropMap)> = vec![(ID_SHOW, item(ID_SHOW, now, &u))];
             if let Ok(s) = Message::new_signal(MENU_PATH, MENU, "ItemsPropertiesUpdated") {
                 let _ = conn.send(s.append2(changed, Vec::<(i32, Vec<String>)>::new()));
             }

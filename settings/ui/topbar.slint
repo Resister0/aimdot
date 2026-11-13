@@ -84,7 +84,7 @@ export component TopBar inherits Rectangle {
         padding-left: 16px;
         padding-right: root.custom-frame ? 0px : 16px;
         spacing: 8px;
-        // logo like Echo's: a tile in the theme's gradient with an accent glow, the icon drawn in white on top
+        // logo like Echo's: a tile in the theme's gradient with an accent glow, the icon drawn in white on top (near-black on very light themes: T.on-accent)
         // (the lock-on arcs + aim dot of assets/icons/aimdot.svg); the taskbar / window icon stays the coral one
         Rectangle {
             y: 12px;
@@ -100,13 +100,13 @@ export component TopBar inherits Rectangle {
                 height: 28px;
                 viewbox-width: 64;
                 viewbox-height: 64;
-                stroke: white;
+                stroke: T.on-accent;
                 stroke-width: 3.1px;
                 stroke-line-cap: round;
                 fill: transparent;
                 commands: "M50.54 24.51 A20 20 0 0 0 39.49 13.46 M24.51 13.46 A20 20 0 0 0 13.46 24.51 M13.46 39.49 A20 20 0 0 0 24.51 50.54 M39.49 50.54 A20 20 0 0 0 50.54 39.49";
             }
-            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: white; }
+            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: T.on-accent; }
         }
         Text {
             text: "Aimdot";

@@ -248,7 +248,7 @@ impl App {
         theme::apply(ui, &theme::palette(&id, &acc, &bg));
         let s = ui.global::<S>();
         s.set_ui_theme(id.as_str().into());
-        s.set_themes(theme::lines(&id, &acc, &bg));
+        s.set_themes(theme::cards(&id, &acc, &bg));
         s.set_ui_accent_rgb(rgb.0);
         s.set_ui_bg_rgb(rgb.1);
         // RGB: a 33 ms timer only while the custom theme has an RGB colour (it draws only while this window is in front)

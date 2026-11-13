@@ -1,7 +1,7 @@
 // Aimdot settings window. Rust (src/main.rs) owns the state (crosshair-core's Model) and pushes it into the
 // global S; every change goes back through S's callbacks with config.ini's key names, so Rust can set it with
 // the same code that reads config.ini.
-import { T, Ic, Icon, Btn, Switch, Slider, Seg, Opt, NavBtn, TopGlow, Card, Row, Note, ColorPick, Edge, ThemeCard, ThemeLine, ThemeTile, LiftTile, Find, Tip, TipLayer, Toast, ToastLayer } from "theme.slint";
+import { T, Ic, Icon, Btn, Switch, Slider, Seg, Opt, NavBtn, TopGlow, Card, Row, Note, ColorPick, Edge, ThemeCard, ThemeGrid, ThemeTile, LiftTile, Find, Tip, TipLayer, Toast, ToastLayer } from "theme.slint";
 import { TopBar } from "topbar.slint";
 // the Images + Painter pages (aimdot-painter session: images.slint / painter.slint, src/images.rs / painter.rs)
 import { ImagesPage, Imgs, PIc } from "images.slint";
@@ -145,7 +145,7 @@ export global S {
     in property <string> ui-theme;
     in property <bool> ui-accent-rgb;      // custom theme: the accent / background cycle through the rainbow (RGB)
     in property <bool> ui-bg-rgb;
-    in property <[ThemeLine]> themes;
+    in property <[ThemeCard]> themes;
     in property <[string]> hk-keys;
     callback num(string, float);
     callback flag(string, bool);
@@ -789,22 +789,13 @@ component HotkeysSec inherits VerticalLayout {
 }
 component AppearanceSec inherits VerticalLayout {
     spacing: 14px;
-    if (Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window")): Card {
+    if (Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean plum mono sand seasonal custom match system window")): Card {
         title: "Theme";
         VerticalLayout {
             padding-top: 6px;
-            spacing: 12px;
-            for line in S.themes: HorizontalLayout {
-                spacing: 12px;
-                for c in line.items: ThemeTile {
-                    c: c;
-                    picked(id) => { S.set-theme(id); }
-                }
-                // fill a short last line so the cards keep their width
-                for i in (4 - line.items.length): Rectangle {
-                    horizontal-stretch: 1;
-                    max-width: 200px;
-                }
+            ThemeGrid {
+                cards: S.themes;
+                picked(id) => { S.set-theme(id); }
             }
         }
         Note {
@@ -1030,7 +1021,7 @@ component SettingsPage inherits FocusScope {
                     }
                     appearance-s := VerticalLayout {
                         spacing: 14px;
-                        if Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window custom colours colors accent background"): VerticalLayout {
+                        if Find.q == "" || Find.matches(Find.q, "appearance theme themes look colour color dark light coral violet ocean plum mono sand seasonal custom match system window custom colours colors accent background"): VerticalLayout {
                             spacing: 14px;
                             padding-bottom: 48px; // room: wrapped texts are counted a little short in the layout
                             PageTitle { title: "Appearance"; sub: "Pick a look for this window - the crosshair keeps its own colours."; }
@@ -1055,7 +1046,7 @@ component SettingsPage inherits FocusScope {
                             AboutSec { }
                         }
                     }
-                    if Find.q != "" && !Find.matches(Find.q, "placement show hide crosshair monitor screen move left right up down offset position centre center follow game size pixels percent resolution 1080p 1440p 4k scale display mode game bar fullscreen exclusive directx widget behaviour behavior when to show aiming aim right mouse button hide while aiming efficiency mode power priority instant fade menus cursor fair play ranked anti-cheat anticheat allowed rules hotkeys hotkey keys keyboard shortcut shortcuts show hide next previous saved crosshair open settings nudge move 1 px zoom hold wheel appearance theme themes look colour color dark light coral violet ocean seasonal custom match system window custom colours colors accent background start with my pc computer log in login autostart boot startup background minimised minimized tray about overlay running quit start version memory cpu about credits made by resister0 sonela log logs problem bug help feedback diagnose copy folder"): Note { text: "Nothing found. Try another word, like \"hotkey\", \"theme\" or \"monitor\"."; }
+                    if Find.q != "" && !Find.matches(Find.q, "placement show hide crosshair monitor screen move left right up down offset position centre center follow game size pixels percent resolution 1080p 1440p 4k scale display mode game bar fullscreen exclusive directx widget behaviour behavior when to show aiming aim right mouse button hide while aiming efficiency mode power priority instant fade menus cursor fair play ranked anti-cheat anticheat allowed rules hotkeys hotkey keys keyboard shortcut shortcuts show hide next previous saved crosshair open settings nudge move 1 px zoom hold wheel appearance theme themes look colour color dark light coral violet ocean plum mono sand seasonal custom match system window custom colours colors accent background start with my pc computer log in login autostart boot startup background minimised minimized tray about overlay running quit start version memory cpu about credits made by resister0 sonela log logs problem bug help feedback diagnose copy folder"): Note { text: "Nothing found. Try another word, like \"hotkey\", \"theme\" or \"monitor\"."; }
                     // room so the last section can scroll to the top
                     Rectangle { height: max(0px, sv.visible-height - about-s.preferred-height - 40px); }
                 }

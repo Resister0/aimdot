@@ -341,7 +341,7 @@ component LayerLine inherits Rectangle {
             border-width: 1.5px;
             border-color: root.l.sel ? T.accent : T.hover;
             background: root.l.sel ? T.accent : transparent;
-            if root.l.sel: Icon { width: 14px; height: 14px; commands: PIc.tick; stroke: white; stroke-width: 2.2px; }
+            if root.l.sel: Icon { width: 14px; height: 14px; commands: PIc.tick; stroke: T.on-accent; stroke-width: 2.2px; }
             TouchArea { mouse-cursor: pointer; clicked => { Paint.layer-tick(root.l.index, !root.l.sel); } }
         }
         // eye
