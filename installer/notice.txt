@@ -5,7 +5,7 @@ WHAT IT INSTALLS
 Aimdot installs for you only (no administrator rights) into your user folder (AppData\Local\Aimdot), with a Start menu entry and an uninstaller in Windows Settings > Apps. Your settings and crosshair images live in AppData\Roaming\Aimdot.
 
 PRIVACY
-Aimdot keeps your settings on this PC. The only thing it does by itself is check sonela.app every few hours for a newer version; that check contains Aimdot's version number and your system type (Windows or Linux). No ID and nothing about you.
+Aimdot keeps your settings on this PC. By itself it only talks to sonela.app: every few hours it checks for a newer version, and at most once a day it says it's in use, so the daily number of users can go up by one. Both contain only Aimdot's version number and your system type (Windows or Linux), plus whether it's the very first start. No ID and nothing about you. Settings > About > Updates turns the daily count off.
 
 FAIR PLAY
 Some competitive games and anti-cheat systems don't allow overlays or crosshair tools. Check the game's rules before you use it.

@@ -9,10 +9,15 @@
 name: Build Aimdot
 on:
   push:
-    branches: [main]
+    # update channels (21 Nov 2026, Echo's method): main = stable (the "latest" release, as always), beta / dev = their
+    # own pre-releases "beta" / "dev" that only Aimdot copies set to that channel are offered (sonela.app, Site/src/worker.js)
+    branches: [main, beta, dev]
   workflow_dispatch:
 permissions:
   contents: write
+env:
+  CHANNEL: ${{ github.ref_name == 'beta' && 'beta' || github.ref_name == 'dev' && 'dev' || 'stable' }}
+  RELEASE_TAG: ${{ github.ref_name == 'beta' && 'beta' || github.ref_name == 'dev' && 'dev' || 'latest' }}
 # one publish at a time: two runs side by side both delete + re-create the "latest" release. Queued, not cancelled.
 concurrency:
   group: publish
@@ -262,7 +267,7 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
           NO_STRIP: 1
-          INFO: gh-releases-zsync|Resister0|aimdot|latest|Aimdot-x86_64.AppImage.zsync
+          INFO: gh-releases-zsync|Resister0|aimdot|${{ env.RELEASE_TAG }}|Aimdot-x86_64.AppImage.zsync
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AIMDOT_SIGNING_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIMDOT_SIGNING_KEY_PASSWORD }}
         run: |
@@ -329,7 +334,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: out
-      - name: Publish as "latest" release
+      - name: Publish as the channel's release ("latest" = stable, "beta", "dev")
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -352,5 +357,14 @@ jobs:
 
           Some games don't allow crosshair overlays in ranked - check before you play.
           Windows build: ${{ needs.windows.result }} / Linux build: ${{ needs.linux.result }}"
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create latest rel/* --title "Aimdot $V" --notes "$notes"
+          gh release delete "$RELEASE_TAG" --yes --cleanup-tag 2>/dev/null || true
+          if [ "$CHANNEL" = "stable" ]; then
+            gh release create latest rel/* --title "Aimdot $V" --notes "$notes"
+          else
+            # beta / dev: a pre-release (not "Latest" on GitHub), never touches the stable "latest" release or the
+            # download buttons; the "Built from:" line stays first (sonela.app reads it)
+            gh release create "$RELEASE_TAG" rel/* --prerelease --title "Aimdot $V ($CHANNEL)" --target "$GITHUB_SHA" --notes "Built from: $msg
+
+          $CHANNEL build - Aimdot copies set to the $CHANNEL update channel (Settings > About > Updates) get it as an update. Everyone else: download the normal version from sonela.app/aimdot.
+          Windows build: ${{ needs.windows.result }} / Linux build: ${{ needs.linux.result }}"
+          fi

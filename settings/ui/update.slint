@@ -1,7 +1,7 @@
 // Auto-update UI (src/update.rs fills `Upd`; main.rs: `let _updater = update::wire!(ui);`).
 // app.slint: import { Upd, UpdateBanner, UpdateCard } from "update.slint"; + `export { Upd }` (Rust needs it),
 // UpdateBanner { } above the pages, UpdateCard { } in Settings > About.
-import { T, Btn, Card, Row, Note, Find } from "theme.slint";
+import { T, Btn, Card, Row, Note, Find, Switch, Seg } from "theme.slint";
 
 export global Upd {
     // a newer Aimdot is known (update.ini / the last check)
@@ -17,6 +17,16 @@ export global Upd {
     in-out property <bool> can-check;
     callback check();
     callback install();
+    // the daily count (once a day: version + Windows / Linux, no ID) - About > Updates switch
+    in-out property <bool> count-on: true;
+    callback set-count(bool);
+    // update channel (21 Nov 2026, Echo's): 0 Stable, 1 Beta, 2 Dev (dev asks for the tester code first)
+    in-out property <int> channel;
+    callback set-channel(int);
+    in-out property <bool> asking-code;
+    in-out property <bool> code-busy;
+    in-out property <string> code-msg;
+    callback dev-code(string);
 }
 
 // One slim line above the pages while a newer version is known: "Update to Aimdot 0.1.7" + the button.
@@ -62,7 +72,7 @@ export component UpdateBanner inherits Rectangle {
 
 // Settings > About: "Updates" card - status line, "Check for updates", and the install button when there is one.
 export component UpdateCard inherits VerticalLayout {
-    if (Find.q == "" || Find.matches(Find.q, "about update updates new version check download install upgrade")): Card {
+    if (Find.q == "" || Find.matches(Find.q, "about update updates new version check download install upgrade channel beta dev stable")): Card {
         title: "Updates";
         Row {
             label: Upd.available ? "Aimdot " + Upd.version + " is out" : "Aimdot updates";
@@ -87,6 +97,69 @@ export component UpdateCard inherits VerticalLayout {
             }
         }
         if Upd.available && Upd.notes != "": Note { text: "What's new: " + Upd.notes; }
+        if Upd.can-check: Row {
+            label: "Update channel";
+            sub: Upd.channel == 1 ? "Beta - new versions a little earlier than everyone else."
+                : Upd.channel == 2 ? "Dev - test builds for testers."
+                : "Stable - the normal Aimdot.";
+            Seg {
+                y: (parent.height - self.height) / 2;
+                opts: [{ label: "Stable", value: 0 }, { label: "Beta", value: 1 }, { label: "Dev", value: 2 }];
+                value: Upd.asking-code ? 2 : Upd.channel;
+                picked(v) => {
+                    Upd.code-msg = "";
+                    if (v == 2) {
+                        Upd.asking-code = Upd.channel != 2;
+                    } else {
+                        Upd.asking-code = false;
+                        if (v != Upd.channel) { Upd.channel = v; Upd.set-channel(v); }
+                    }
+                }
+            }
+        }
+        if Upd.can-check && Upd.asking-code: Row {
+            label: "Dev code";
+            sub: Upd.code-msg != "" ? Upd.code-msg : "Dev is for testers - type the code you got from the developer.";
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 150px;
+                    height: 32px;
+                    border-radius: T.r-small;
+                    border-width: 1px;
+                    border-color: code.has-focus ? T.accent : T.line;
+                    background: T.bg;
+                    code := TextInput {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        color: T.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        single-line: true;
+                        accepted => { if (!Upd.code-busy && self.text != "") { Upd.code-busy = true; Upd.dev-code(self.text); } }
+                    }
+                }
+                Btn {
+                    y: (parent.height - self.height) / 2;
+                    text: Upd.code-busy ? "Checking…" : "OK";
+                    primary: true;
+                    small: true;
+                    enabled: !Upd.code-busy;
+                    clicked => { if (code.text != "") { Upd.code-busy = true; Upd.dev-code(code.text); } }
+                }
+            }
+        }
+        if Upd.can-check: Note { text: "Going back to Stable: you keep the version you have until Stable gets a newer one."; }
         Note { text: "Aimdot checks sonela.app every few hours. The check sends only Aimdot's version and your system type (Windows or Linux) - no ID, nothing about you."; }
+        Row {
+            label: "Count me in the daily numbers";
+            sub: "once a day Aimdot tells sonela.app it's in use: its version and Windows or Linux - no ID, nothing else";
+            Switch {
+                y: (parent.height - self.height) / 2;
+                on: Upd.count-on;
+                toggled(v) => { Upd.count-on = v; Upd.set-count(v); }
+            }
+        }
     }
 }

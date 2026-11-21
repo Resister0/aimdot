@@ -67,15 +67,27 @@ pub fn cli() -> bool {
 
 /// GET -> (status, body). reqwest blocking + rustls/ring like Echo (rustls without a default crypto provider:
 /// ring is installed once). Redirects are followed (GitHub downloads redirect).
-#[cfg(not(all(windows, target_env = "gnu")))]
 fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
+    http(url, &[], None)
+}
+
+/// GET (or POST with a JSON body) with extra headers.
+#[cfg(not(all(windows, target_env = "gnu")))]
+fn http(url: &str, headers: &[(&str, String)], post_json: Option<String>) -> Result<(u16, Vec<u8>), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let c = reqwest::blocking::Client::builder()
         .user_agent(format!("Aimdot/{}", cu::current_version()))
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut r = c.get(url).send().map_err(|e| format!("no connection ({e})"))?;
+    let mut req = match post_json {
+        Some(b) => c.post(url).header("content-type", "application/json").body(b),
+        None => c.get(url),
+    };
+    for (k, v) in headers {
+        req = req.header(*k, v.as_str());
+    }
+    let mut r = req.send().map_err(|e| format!("no connection ({e})"))?;
     let code = r.status().as_u16();
     let mut body = Vec::new();
     std::io::copy(&mut r, &mut body).map_err(|e| format!("download failed ({e})"))?;
@@ -84,13 +96,16 @@ fn http_get(url: &str) -> Result<(u16, Vec<u8>), String> {
 
 /// The windows-gnu type check from Linux has no HTTPS crates (Cargo.toml) - never a real build.
 #[cfg(all(windows, target_env = "gnu"))]
-fn http_get(_url: &str) -> Result<(u16, Vec<u8>), String> {
+fn http(_url: &str, _headers: &[(&str, String)], _post_json: Option<String>) -> Result<(u16, Vec<u8>), String> {
     Err("no HTTPS in this build".into())
 }
 
 /// One check: the server's answer as a State (version "" = up to date).
 fn check_once() -> Result<cu::State, String> {
-    let (code, body) = http_get(&cu::check_url())?;
+    // update channels (21 Nov 2026): dev sends the tester code (sonela.app answers stable for a wrong one)
+    let (ch, dev_code) = cu::channel();
+    let headers = if ch == "dev" { vec![("x-sonela-code", dev_code)] } else { vec![] };
+    let (code, body) = http(&cu::check_url(), &headers, None)?;
     let body = String::from_utf8_lossy(&body).to_string();
     let mut s = cu::State { checked: cu::now(), ..Default::default() };
     if code == 204 || body.trim().is_empty() {
@@ -111,8 +126,73 @@ fn check_once() -> Result<cu::State, String> {
     Ok(s)
 }
 
+// ----- the daily count (20 Nov 2026): at most ONE request a day, from the update check -----
+// `GET https://sonela.app/aimdot/ping?v=<version>&os=<windows|linux>&new=<0|1>` (User-Agent "Aimdot/<version>"):
+// sonela.app adds one to that day's users (and installs when new=1). No ID, nothing else sent or kept. Release builds
+// only (like the update check). Off: About > Updates > "Count me in the daily numbers" (usage.ini `off=1`).
+// usage.ini in the config folder: `last=<UTC day>`, `installed=1` (a ping went out once), `off=1`.
+
+fn usage_path() -> PathBuf {
+    crosshair_core::paths::config_dir().join("usage.ini")
+}
+
+fn usage_read() -> (String, bool, bool) {
+    let s = std::fs::read_to_string(usage_path()).unwrap_or_default();
+    let get = |k: &str| s.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).unwrap_or("").trim().to_string();
+    (get("last"), get("installed") == "1", get("off") == "1")
+}
+
+fn usage_write(last: &str, installed: bool, off: bool) {
+    let _ = std::fs::write(usage_path(), format!("last={last}\ninstalled={}\noff={}\n", installed as u8, off as u8));
+}
+
+/// The daily count is on (About > Updates switch)
+pub fn usage_on() -> bool {
+    !usage_read().2
+}
+
+pub fn set_usage(on: bool) {
+    let (last, installed, _) = usage_read();
+    usage_write(&last, installed, !on);
+}
+
+/// UTC day "YYYY-MM-DD" of a unix time
+fn utc_day(t: u64) -> String {
+    let z = (t / 86400) as i64 + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The request for today, or None (already sent today / switched off). Pure, for the tests.
+/// `ch` = the update channel (21 Nov 2026: the admin page shows how many copies use each one).
+fn ping_due(last: &str, installed: bool, off: bool, today: &str, version: &str, os: &str, ch: &str) -> Option<String> {
+    if off || last == today {
+        return None;
+    }
+    Some(format!("https://sonela.app/aimdot/ping?v={version}&os={os}&new={}&ch={ch}", if installed { 0 } else { 1 }))
+}
+
+fn daily_ping() {
+    let (last, installed, off) = usage_read();
+    let day = utc_day(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+    let os = if cfg!(windows) { "windows" } else { "linux" };
+    let Some(url) = ping_due(&last, installed, off, &day, &cu::current_version(), os, &cu::channel().0) else { return };
+    if matches!(http_get(&url), Ok((c, _)) if (200..300).contains(&c)) {
+        usage_write(&day, true, false);
+        log("daily count sent");
+    }
+}
+
 /// Check + write update.ini (a failure keeps the last known update and notes the error).
 fn check_and_save() -> Result<cu::State, String> {
+    daily_ping();
     let r = check_once();
     let s = match &r {
         Ok(s) => s.clone(),
@@ -181,6 +261,8 @@ pub struct View {
     pub busy: bool,
     /// "Check for updates" makes sense (release build, not Flatpak)
     pub can_check: bool,
+    /// update channel: 0 stable, 1 beta, 2 dev
+    pub channel: i32,
 }
 
 pub type Sink = Arc<dyn Fn(View) + Send + Sync>;
@@ -219,7 +301,12 @@ impl Updater {
         } else {
             "Download"
         };
-        View { available, version: s.version.clone(), notes: s.notes.clone(), status, button: button.into(), busy, can_check: checks() }
+        let channel = match cu::channel().0.as_str() {
+            "beta" => 1,
+            "dev" => 2,
+            _ => 0,
+        };
+        View { available, version: s.version.clone(), notes: s.notes.clone(), status, button: button.into(), busy, can_check: checks(), channel }
     }
 
     fn show(&self) {
@@ -250,6 +337,49 @@ impl Updater {
                 Err(e) if by_hand => u.set_status(format!("Couldn't check for updates: {e}")),
                 _ => u.set_status(""),
             }
+        });
+    }
+
+    /// Settings > About > Updates > Update channel: 0 stable, 1 beta (saved at once, then a check), 2 dev (asks for
+    /// the code first: `dev_code`).
+    pub fn set_channel(self: &Arc<Self>, pick: i32) {
+        match pick {
+            0 | 1 => {
+                let ch = if pick == 1 { "beta" } else { "stable" };
+                if let Err(e) = cu::set_channel(ch, "") {
+                    self.set_status(format!("Couldn't save the update channel: {e}"));
+                    return;
+                }
+                log(&format!("update channel: {ch}"));
+                self.check(true);
+            }
+            _ => self.show(),
+        }
+    }
+
+    /// The dev code typed in: sonela.app checks it, then dev is saved (a wrong code changes nothing).
+    pub fn dev_code(self: &Arc<Self>, code: String, done: impl Fn(Result<bool, String>) + Send + 'static) {
+        let code = code.trim().to_string();
+        if code.is_empty() {
+            return;
+        }
+        let u = self.clone();
+        std::thread::spawn(move || {
+            let body = format!("{{\"code\":\"{}\"}}", code.replace('\\', "\\\\").replace('"', "\\\""));
+            let r = http("https://sonela.app/aimdot/channel/check", &[], Some(body)).and_then(|(c, b)| match c {
+                200 => Ok(String::from_utf8_lossy(&b).replace(' ', "").contains("\"ok\":true")),
+                429 => Err("too many tries - wait an hour".into()),
+                c => Err(format!("the server answered {c}")),
+            });
+            if let Ok(true) = r {
+                if let Err(e) = cu::set_channel("dev", &code) {
+                    done(Err(e.to_string()));
+                    return;
+                }
+                log("update channel: dev");
+                u.check(true);
+            }
+            done(r);
         });
     }
 
@@ -369,6 +499,7 @@ macro_rules! wire {
                 g.set_button(v.button.into());
                 g.set_busy(v.busy);
                 g.set_can_check(v.can_check);
+                g.set_channel(v.channel);
             });
         });
         let u = $crate::update::start(sink);
@@ -380,6 +511,34 @@ macro_rules! wire {
             let u = u.clone();
             $ui.global::<Upd>().on_install(move || u.install());
         }
+        {
+            let u = u.clone();
+            $ui.global::<Upd>().on_set_channel(move |pick| u.set_channel(pick));
+        }
+        {
+            let u = u.clone();
+            let w = $ui.as_weak();
+            $ui.global::<Upd>().on_dev_code(move |code| {
+                let w = w.clone();
+                u.dev_code(code.to_string(), move |r| {
+                    let msg: String = match r {
+                        Ok(true) => String::new(),
+                        Ok(false) => "That code isn't right - ask the developer for it again.".into(),
+                        Err(e) => format!("Couldn't check the code: {e}"),
+                    };
+                    let _ = w.upgrade_in_event_loop(move |a| {
+                        let g = a.global::<Upd>();
+                        g.set_code_busy(false);
+                        if msg.is_empty() {
+                            g.set_asking_code(false);
+                        }
+                        g.set_code_msg(msg.into());
+                    });
+                });
+            });
+        }
+        $ui.global::<Upd>().set_count_on($crate::update::usage_on());
+        $ui.global::<Upd>().on_set_count(|on| $crate::update::set_usage(on));
         u
     }};
 }
@@ -389,6 +548,17 @@ pub(crate) use wire;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daily_ping_once_a_day() {
+        assert_eq!(utc_day(0), "1970-01-01");
+        assert_eq!(utc_day(1_795_200_000), "2026-11-20");
+        let first = ping_due("", false, false, "2026-11-20", "1.0.6", "linux", "stable").unwrap();
+        assert!(first.ends_with("/aimdot/ping?v=1.0.6&os=linux&new=1&ch=stable"), "{first}");
+        assert_eq!(ping_due("2026-11-20", true, false, "2026-11-20", "1.0.6", "linux", "stable"), None);
+        assert_eq!(ping_due("2026-11-19", true, true, "2026-11-20", "1.0.6", "linux", "stable"), None);
+        assert!(ping_due("2026-11-19", true, false, "2026-11-20", "1.0.6", "windows", "beta").unwrap().ends_with("&new=0&ch=beta"));
+    }
 
     #[test]
     fn no_key_means_no_install() {

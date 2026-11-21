@@ -47,10 +47,50 @@ pub fn arch() -> &'static str {
     }
 }
 
-/// The URL this copy asks.
+/// The URL this copy asks (+ `?ch=beta|dev` on those update channels; stable = no parameter = the old request).
 pub fn check_url() -> String {
     let base = std::env::var("AIMDOT_UPDATE_URL").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| UPDATE_BASE.to_string());
-    format!("{}/{}/{}/{}", base.trim_end_matches('/'), os(), arch(), current_version())
+    check_url_for(&base, &current_version(), &channel().0)
+}
+
+fn check_url_for(base: &str, version: &str, channel: &str) -> String {
+    let q = if channel == "stable" { String::new() } else { format!("?ch={channel}") };
+    format!("{}/{}/{}/{version}{q}", base.trim_end_matches('/'), os(), arch())
+}
+
+// ----- update channels (21 Nov 2026, Echo's method): Settings > About > Updates > Update channel -----
+// stable = the normal releases; beta = new versions a little earlier (sonela.app offers the newest of stable + beta);
+// dev = testers, needs the code from the developer (sent as header x-sonela-code; a wrong code = stable). Kept in
+// channel.ini in the config folder: `channel=<stable|beta|dev>`, `code=<dev code>`. No file = stable.
+
+pub fn channel_path() -> PathBuf {
+    crate::paths::config_dir().join("channel.ini")
+}
+
+fn parse_channel(text: &str) -> (String, String) {
+    let get = |k: &str| text.lines().find_map(|l| l.trim().strip_prefix(&format!("{k}="))).unwrap_or("").trim().to_string();
+    let ch = match get("channel").as_str() {
+        "beta" => "beta",
+        "dev" => "dev",
+        _ => "stable",
+    };
+    let code = if ch == "dev" { get("code") } else { String::new() };
+    (ch.to_string(), code)
+}
+
+/// ("stable" | "beta" | "dev", the dev code - "" unless dev)
+pub fn channel() -> (String, String) {
+    parse_channel(&std::fs::read_to_string(channel_path()).unwrap_or_default())
+}
+
+/// Saves the channel. A change forgets the known update (it was the old channel's answer) so the next check decides.
+pub fn set_channel(ch: &str, code: &str) -> std::io::Result<()> {
+    let (ch, code) = parse_channel(&format!("channel={ch}\ncode={}", code.trim().replace(['\n', '\r'], "")));
+    if channel() != (ch.clone(), code.clone()) {
+        let _ = std::fs::remove_file(state_path());
+    }
+    std::fs::create_dir_all(crate::paths::config_dir())?;
+    std::fs::write(channel_path(), format!("channel={ch}\ncode={code}\n"))
 }
 
 /// a > b for "x.y.z" versions (anything after - or + is ignored).
@@ -257,6 +297,18 @@ mod tests {
         assert_eq!(json_str(b, "signature").as_deref(), Some("dW50cnVzdGVk"));
         assert_eq!(json_str(b, "missing"), None);
         assert_eq!(json_str(r#"{ "version" : "1.2.3" }"#, "version").as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn channels() {
+        assert_eq!(parse_channel(""), ("stable".into(), "".into()));
+        assert_eq!(parse_channel("channel=beta\ncode=abc\n"), ("beta".into(), "".into()));
+        assert_eq!(parse_channel("channel=dev\ncode= abc123 \n"), ("dev".into(), "abc123".into()));
+        assert_eq!(parse_channel("channel=nightly\n"), ("stable".into(), "".into()));
+        let u = check_url_for("https://sonela.app/aimdot/update/", "1.0.7", "stable");
+        assert_eq!(u, format!("https://sonela.app/aimdot/update/{}/{}/1.0.7", os(), arch()));
+        assert!(check_url_for("https://x/u", "1.0.7", "beta").ends_with("/1.0.7?ch=beta"));
+        assert!(check_url_for("https://x/u", "1.0.7", "dev").ends_with("/1.0.7?ch=dev"));
     }
 
     #[test]
